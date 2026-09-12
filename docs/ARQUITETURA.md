@@ -217,6 +217,22 @@ Base: `http://localhost:8000`. Todas as respostas em JSON, timestamps em
 | GET | `/api/stats` | mín/máx/média por grandeza em um período |
 | WS | `/ws/live` | push de cada nova leitura assim que chega do MQTT |
 
+### Formatos auxiliares
+
+`GET /api/health` devolve `{"status":"ok","mqtt":true,"influxdb":true}`.
+Se qualquer dependência estiver indisponível, devolve HTTP 503, `status` igual
+a `degraded`, os booleanos correspondentes e uma mensagem em `detail`.
+
+`GET /api/thresholds` devolve um objeto por grandeza, contendo `ok_min`,
+`ok_max`, `crit_min` e `crit_max` da §5. Para nível, limites superiores são
+`null` (não há alerta por nível alto). Em turbidez, `ok_max` é exclusivo:
+40 NTU já é atenção.
+
+`GET /api/tanks` devolve uma lista de objetos com `tank_id`, `last_seen`
+(ISO 8601 UTC, ou `null` se só houve status) e `online` (booleano).
+`count` em `/api/stats` conta leituras distintas por dispositivo e timestamp,
+não o número de fields. Campos ausentes não contam como zero.
+
 ### `GET /api/readings/latest?tank_id=tanque-01`
 
 ```json

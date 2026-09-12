@@ -62,7 +62,7 @@ def tank_id_from_topic(topic: str) -> str | None:
     Devolve None se o tópico não tiver esse formato.
     """
 
-    parts = topic.split("/")
+    parts = topic.rsplit("/", 2)
 
     if len(parts) != 3:
         return None
@@ -87,7 +87,7 @@ def _valid_measurement(field: str, value) -> float | None:
 
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         logger.warning(
             "Grandeza %s descartada: valor inválido (%r)",
             field,
@@ -119,7 +119,7 @@ def _parse_timestamp(ts) -> datetime:
 
     try:
         timestamp = int(ts)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         timestamp = 0
 
     if timestamp <= 1700000000:
@@ -248,7 +248,6 @@ def parse_reading(topic: str, payload: bytes) -> SensorReading | None:
         temperature_c,
         ph,
         level_pct,
-        distance_cm,
         turbidity_ntu,
     ]
 
@@ -279,7 +278,7 @@ def parse_reading(topic: str, payload: bytes) -> SensorReading | None:
 
     try:
         seq = int(seq) if seq is not None and int(seq) >= 0 else None
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         seq = None
 
     try:
@@ -288,7 +287,7 @@ def parse_reading(topic: str, payload: bytes) -> SensorReading | None:
             if uptime_s is not None and int(uptime_s) >= 0
             else None
         )
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         uptime_s = None
 
     try:
@@ -297,7 +296,7 @@ def parse_reading(topic: str, payload: bytes) -> SensorReading | None:
             if rssi is not None and -100 <= int(rssi) <= 0
             else None
         )
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         rssi = None
 
     # ---------------------------------------------------------

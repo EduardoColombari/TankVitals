@@ -40,16 +40,9 @@ RANGES = {
 
     "level_pct": {
         "ok_min": settings.level_ok_min,
-        "ok_max": settings.level_ok_max,
+        "ok_max": None,
         "crit_min": settings.level_crit_min,
-        "crit_max": settings.level_crit_max,
-    },
-
-    "distance_cm": {
-        "ok_min": settings.distance_ok_min,
-        "ok_max": settings.distance_ok_max,
-        "crit_min": settings.distance_crit_min,
-        "crit_max": settings.distance_crit_max,
+        "crit_max": None,
     },
 
     "turbidity_ntu": {
@@ -68,6 +61,16 @@ def classify_metric(metric: str, value: float) -> AlertLevel:
         raise ValueError(f"Grandeza desconhecida: {metric}")
 
     limits = RANGES[metric]
+
+    if metric == "turbidity_ntu":
+        if value < limits["ok_max"]:
+            return AlertLevel.OK
+        return AlertLevel.ATENCAO if value <= limits["crit_max"] else AlertLevel.CRITICO
+
+    if metric == "level_pct":
+        if value >= limits["ok_min"]:
+            return AlertLevel.OK
+        return AlertLevel.ATENCAO if value >= limits["crit_min"] else AlertLevel.CRITICO
 
     # Faixa OK
     if limits["ok_min"] <= value <= limits["ok_max"]:
@@ -90,7 +93,6 @@ def classify_reading(
         "temperature_c",
         "ph",
         "level_pct",
-        "distance_cm",
         "turbidity_ntu",
     ]
 

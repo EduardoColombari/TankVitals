@@ -8,6 +8,7 @@ Regra: nenhum valor configurável pode estar espalhado pelo código.
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pathlib import Path
 
 
 class Settings(BaseSettings):
@@ -28,7 +29,7 @@ class Settings(BaseSettings):
     # -------------------------
     influx_url: str = "http://localhost:8086"
     influx_token: str
-    influx_org: str = "tankvitals"
+    influx_org: str = "unifacef"
     influx_bucket: str = "tankvitals"
 
     # -------------------------
@@ -45,21 +46,21 @@ class Settings(BaseSettings):
     temp_ok_max: float = 28.0
 
     ph_ok_min: float = 6.5
-    ph_ok_max: float = 8.5
+    ph_ok_max: float = 8.0
 
     level_ok_min: float = 30.0
 
-    turbidity_ok_max: float = 300.0
+    turbidity_ok_max: float = 40.0
 
     # Provisórios para permitir 3 níveis
-    temp_crit_min: float = 20.0
-    temp_crit_max: float = 32.0
+    temp_crit_min: float = 22.0
+    temp_crit_max: float = 30.0
 
     ph_crit_min: float = 6.0
-    ph_crit_max: float = 9.0
+    ph_crit_max: float = 8.5
 
     level_ok_max: float = 90.0
-    level_crit_min: float = 10.0
+    level_crit_min: float = 15.0
     level_crit_max: float = 98.0
 
     distance_ok_min: float = 10.0
@@ -69,10 +70,10 @@ class Settings(BaseSettings):
 
     turbidity_ok_min: float = 0.0
     turbidity_crit_min: float = 0.0
-    turbidity_crit_max: float = 700.0
+    turbidity_crit_max: float = 60.0
 
     model_config = SettingsConfigDict(
-        env_file=("../.env", ".env"),
+        env_file=Path(__file__).resolve().parents[2] / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
