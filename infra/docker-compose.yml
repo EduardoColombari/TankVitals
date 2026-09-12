@@ -15,7 +15,7 @@ services:
       - ./mosquitto/data:/mosquitto/data
       - ./mosquitto/log:/mosquitto/log
     # A configuração fica em ./mosquitto/config/mosquitto.conf
-    # A bridge com o broker público é a tarefa INFRA-03.
+    # A configuração do broker da VM é a INFRA-03; a bridge do plano B, a INFRA-04.
 
   influxdb:
     image: influxdb:2.7
@@ -24,18 +24,68 @@ services:
     ports:
       - "8086:8086"
     environment:
-      # TODO(INFRA-01): setup automático — assim o banco já sobe pronto e
-      # ninguém precisa refazer o wizard quando recriar o container.
+      # Setup automático: o banco já sobe pronto, com org, bucket e retenção
+      # criados, e ninguém precisa refazer o wizard ao recriar o container.
       DOCKER_INFLUXDB_INIT_MODE: setup
-      DOCKER_INFLUXDB_INIT_USERNAME: # TODO
-      DOCKER_INFLUXDB_INIT_PASSWORD: # TODO (mínimo 8 caracteres)
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUXDB_USERNAME:-tankvitals}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_PASSWORD:-tankvitals123}
       DOCKER_INFLUXDB_INIT_ORG: unifacef
       DOCKER_INFLUXDB_INIT_BUCKET: tankvitals
       DOCKER_INFLUXDB_INIT_RETENTION: 30d
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: # TODO (token fixo de desenvolvimento)
+      # Token fixo de DESENVOLVIMENTO, só para o banco desta máquina. O token
+      # que o backend usa de verdade é o gerado na interface, com escopo apenas
+      # do bucket tankvitals (INFRA-02) — este aqui é de admin.
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_ADMIN_TOKEN:-tankvitals-dev-token}
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     volumes:
       - influxdb-data:/var/lib/influxdb2
       - influxdb-config:/etc/influxdb2
+
+  # Perfil "app": `docker compose up -d` continua subindo só a infraestrutura,
+  # que é o fluxo do README. A pilha inteira sobe com
+  # `docker compose --profile app up -d --build` (dashboard na 8080).
+
+  backend:
+    profiles: ["app"]
+    build:
+      context: ../backend
+    container_name: tankvitals-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      # Na rede do compose quem responde é o nome do serviço; localhost dentro
+      # do container é o próprio container.
+      MQTT_HOST: mosquitto
+      MQTT_PORT: 1883
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: ${INFLUXDB_ADMIN_TOKEN:-tankvitals-dev-token}
+      CORS_ORIGINS: http://localhost:8080,http://localhost:5173
+    depends_on:
+      influxdb:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+
+  frontend:
+    profiles: ["app"]
+    build:
+      context: ../frontend
+    container_name: tankvitals-frontend
+    restart: unless-stopped
+    ports:
+      # 8080 para não brigar com o `npm run dev` na 5173.
+      - "8080:80"
+    depends_on:
+      - backend
 
 volumes:
   influxdb-data:

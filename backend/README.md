@@ -60,8 +60,9 @@ pytest -q
 - **Ingestor e API no mesmo processo.** O ingestor sobe no `lifespan` do
   FastAPI. Simplifica a demonstração e permite o push por WebSocket sem fila
   intermediária.
-- **O backend só fala com o broker LOCAL.** Quem conversa com o broker público
-  é a bridge do Mosquitto (INFRA-03).
+- **O backend é sempre cliente do broker, nunca servidor.** Ele abre uma
+  conexão de saída para o Mosquitto — na VM (`mqtt.<dominio>`, padrão) ou em
+  `localhost` (plano B com bridge). Trocar de cenário é mexer só no `.env`.
 - **Escrita síncrona no InfluxDB.** O modo em lote é mais rápido, mas na
   apresentação o ponto precisa aparecer no gráfico na hora — e erro de escrita
   em lote passa despercebido.
