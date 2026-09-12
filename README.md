@@ -59,15 +59,13 @@ flowchart LR
     subgraph Dispositivo
         ESP[ESP32 no Wokwi<br/>DS18B20, HC-SR04,<br/>pH, turbidez]
     end
-    subgraph Broker
-        PUB[Mosquitto público<br/>test.mosquitto.org]
-        MOSQ[Mosquitto local<br/>:1883]
-    end
-    subgraph Backend Python
+    PUB[test.mosquitto.org<br/>broker publico]
+    MOSQ[Mosquitto local<br/>bridge importa o topico]
+    subgraph Maquina local
         ING[Ingestor MQTT<br/>paho-mqtt]
         API[API HTTP + WebSocket<br/>FastAPI]
+        DB[(InfluxDB 2.x<br/>bucket tankvitals)]
     end
-    DB[(InfluxDB 2.x<br/>bucket tankvitals)]
     WEB[Dashboard<br/>Vue 3 + TS + Vite<br/>Chart.js]
 
     ESP -->|publish JSON| PUB
@@ -82,18 +80,20 @@ flowchart LR
 O detalhamento de cada contrato (tópicos, payload, schema do banco, endpoints)
 está em **[docs/ARQUITETURA.md](docs/ARQUITETURA.md)**.
 
-### Por que existe um broker público no caminho
+### Onde o broker roda, e por quê
 
 O ESP32 simulado no Wokwi roda na nuvem e **não enxerga a rede local** da
-equipe. Duas saídas válidas, ambas cumprindo a exigência de usar Mosquitto:
+equipe. Como o projeto não tem servidor público, o caminho é o inverso: o
+dispositivo publica no `test.mosquitto.org` — que é uma instância pública do
+próprio Mosquitto — e o **Mosquitto local importa o tópico por bridge**.
 
-- **Opção A (padrão)** — o ESP32 publica no `test.mosquitto.org`, que é uma
-  instância pública do **próprio Mosquitto**, e o Mosquitto local consome esse
-  tópico por *bridge*. O backend sempre fala com o broker local.
-- **Opção B** — expor o Mosquitto local com um túnel TCP (`ngrok tcp 1883`) e
-  apontar o firmware direto para ele.
+Assim o backend continua falando só com um broker local, e nenhuma máquina da
+equipe precisa de porta aberta. Como o broker público é aberto a qualquer um, o
+prefixo de tópico do grupo é único: `tankvitals-unifacef-g3`.
 
-Detalhes e passo a passo em [TAREFAS.md](docs/TAREFAS.md) (INFRA-03).
+Passo a passo em [TAREFAS.md](docs/TAREFAS.md) (INFRA-04) e a discussão completa
+na [ARQUITETURA §7](docs/ARQUITETURA.md#7-conectividade-wokwi--mosquitto), que
+também registra por que a ideia de VM própria foi descartada.
 
 ---
 
@@ -102,7 +102,7 @@ Detalhes e passo a passo em [TAREFAS.md](docs/TAREFAS.md) (INFRA-03).
 | Camada | Tecnologia | Onde vive |
 | --- | --- | --- |
 | Dispositivo | ESP32 simulado no Wokwi (C++/Arduino) | `firmware/wokwi/` |
-| Comunicação | MQTT 3.1.1 | tópicos `tankvitals/#` |
+| Comunicação | MQTT 3.1.1 | tópicos `tankvitals-unifacef-g3/#` |
 | Broker | Eclipse Mosquitto 2.x | `infra/mosquitto/` |
 | Backend | Python 3.13 — paho-mqtt + FastAPI + influxdb-client | `backend/` |
 | Banco de série temporal | InfluxDB 2.7 | `infra/` (Docker) |
@@ -122,17 +122,19 @@ TankVitals/
 │  ├─ ARQUITETURA.md               <- contratos: MQTT, JSON, InfluxDB, API
 │  ├─ TAREFAS.md                   <- backlog com passo a passo e aceite
 │  └─ PADROES-DESENVOLVIMENTO.md   <- branch, commit, PR e receitas de Git
-├─ firmware/wokwi/                 <- FW-01..05: diagram.json + sketch.ino
+├─ firmware/wokwi/                 <- circuito e sketch do ESP32 (FW-01..05)
 ├─ backend/
+│  ├─ Dockerfile                  <- imagem do backend (perfil `app`)
 │  ├─ app/                         <- BE-01..08: config, models, alerts,
 │  │                                  influx_repo, mqtt_ingestor, api, main
 │  ├─ tools/fake_device.py         <- BE-09: publicador falso p/ desenvolver
 │  ├─ tests/                       <- BE-09
 │  └─ requirements.txt
 ├─ frontend/                       <- FE-01..08: Vue 3 + TS + Vite + Chart.js
+│  └─ Dockerfile, nginx.conf       <- imagem do dashboard (perfil `app`)
 └─ infra/
    ├─ docker-compose.yml           <- INFRA-01: Mosquitto + InfluxDB
-   └─ mosquitto/config/            <- INFRA-01 e INFRA-03 (bridge)
+   └─ mosquitto/config/            <- listener e bridge (INFRA-01, INFRA-04)
 ```
 
 ---
@@ -146,16 +148,18 @@ TankVitals/
 | Backlog de implementação | ✅ escrito em [docs/TAREFAS.md](docs/TAREFAS.md) |
 | Projeto Vue criado (Vite + TS + Chart.js instalados) | ✅ `npm run build` passando |
 | Projeto Python criado (dependências instaladas) | ✅ `pytest` rodando |
-| Arquivos de Docker e Mosquitto | ✅ criados, faltam os `TODO` da INFRA-01 |
-| Infraestrutura no ar (Mosquitto + InfluxDB) | ⬜ INFRA-01..05 |
-| Firmware ESP32 / Wokwi | ⬜ FW-01..05 |
+| Infraestrutura no ar (Mosquitto + InfluxDB) | ✅ INFRA-01, 02 e 04 validados |
+| Backend e frontend em container (perfil `app`) | ✅ imagens buildando |
+| Circuito no Wokwi e leitura dos 4 sensores | ✅ FW-01 e FW-02 |
+| Firmware: Wi-Fi, MQTT e publicação | ✅ FW-03..05 escritos, falta rodar no Wokwi |
 | Backend Python | ⬜ BE-01..09 |
-| Frontend Vue 3 | ⬜ FE-01..08 |
+| Frontend Vue 3 | ✅ FE-01..08 |
 
-O ponto de partida já está montado: projetos criados, dependências instaladas e
-os contratos definidos. O que falta é a implementação, e ela está quebrada em
-tarefas com passo a passo e critério de aceite em
-**[docs/TAREFAS.md](docs/TAREFAS.md)** — comece por lá.
+A infraestrutura está no ar e validada, o dashboard está pronto e o firmware
+está escrito. **O que falta é o backend** (BE-01..09): sem ele o dashboard não
+tem com quem falar e o dado do ESP32 não chega no banco. O passo a passo e o
+critério de aceite de cada tarefa estão em
+**[docs/TAREFAS.md](docs/TAREFAS.md)**.
 
 Para criar branch, escrever commit e abrir PR, veja o
 [guia de desenvolvimento](docs/PADROES-DESENVOLVIMENTO.md).
@@ -166,7 +170,7 @@ Para criar branch, escrever commit e abrir PR, veja o
 
 A base já foi desenhada prevendo a ampliação:
 
-- tópico `tankvitals/<tank>/cmd` já é assinado pelo firmware (atuação remota:
+- tópico `<prefixo>/<tank>/cmd` já é assinado pelo firmware (atuação remota:
   alterar intervalo de leitura, futuramente acionar aerador/bomba);
 - `tank_id` é *tag* no InfluxDB, então múltiplos tanques entram sem migração;
 - mensagem de status com *Last Will* já permite detectar dispositivo offline;

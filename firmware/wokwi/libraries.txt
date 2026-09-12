@@ -1,0 +1,10 @@
+# Wokwi Library List
+# See https://docs.wokwi.com/guides/libraries
+
+DallasTemperature
+OneWire
+
+# Versões fixas: a v7 do ArduinoJson trocou StaticJsonDocument por JsonDocument,
+# que é o que o sketch usa. Sem fixar, o Wokwi pode puxar a v6 e não compilar.
+PubSubClient@2.8
+ArduinoJson@7.2.0

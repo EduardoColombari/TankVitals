@@ -33,3 +33,6 @@ Thumbs.db
 # Build de firmware
 .pio/
 build/
+
+# Senhas do Mosquitto (INFRA-03) - nunca versionar
+infra/mosquitto/config/passwd
