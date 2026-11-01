@@ -17,6 +17,10 @@ dist-ssr/
 .env
 .env.local
 *.log
+.*.tmp
+
+# PLAT-02 generated credentials
+secrets/
 
 # Dados locais (InfluxDB / Mosquitto em volumes locais)
 infra/data/

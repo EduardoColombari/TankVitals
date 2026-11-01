@@ -1,0 +1,4 @@
+# PLAT-only addition for the isolated Writer module.
+# Merge this requirement into the shared backend image only after authorization.
+aio-pika==9.6.0
+influxdb-client[async]==1.48.0
