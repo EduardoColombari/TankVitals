@@ -1,0 +1,10 @@
+# TankVitals - dependências novas da frente IOT (2º bimestre).
+# O requirements.txt original não foi alterado: a BACK-01 junta estas linhas a ele
+# (a lista da BACK-01 já prevê todas) e o Dockerfile passa a instalar o conjunto.
+# Instalar com:  pip install -r requirements.txt -r requirements-iot.txt
+
+aio-pika==9.5.5       # RabbitMQ (gateway, rules e API)
+aiomqtt==2.3.0        # MQTT assíncrono (simulador e gateway)
+sqlalchemy==2.0.36    # PostgreSQL (rules e rota de comando)
+psycopg[binary]==3.2.3
+numpy==2.1.3          # ruído do simulador
