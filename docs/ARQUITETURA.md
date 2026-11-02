@@ -436,10 +436,15 @@ Sequência de testes usada nas tarefas (executar nesta ordem):
 
 ## 11. Segundo bimestre: visão e estado deste contrato
 
-> **Estado:** proposta da PLAT-01, escrita a partir do que o frontend já usa no
-> modo simulado (`frontend/src/domain/`, `frontend/src/live/envelope.ts` e
-> `frontend/src/mock/`). Falta uma pessoa de cada frente revisar. Quem precisar
-> mudar um nome muda aqui primeiro e avisa o grupo, como diz a regra de ouro.
+> **Estado:** §§11–17 são a proposta de arquitetura do 2º bimestre, escrita a
+> partir do modo simulado do frontend (`frontend/src/domain/`,
+> `frontend/src/live/envelope.ts` e `frontend/src/mock/`). As seções 1–10
+> continuam descrevendo o backend atualmente implementado. O frontend confirma
+> os formatos usados pelo mock; o gerador de segredos, a topologia RabbitMQ e o
+> Writer têm implementações PLAT isoladas, mas isso ainda não integra o fluxo
+> completo do 2º bimestre. Os contratos entre frentes aguardam revisão e
+> aprovação de IOT, BACK, WEB, IA e PLAT. Até essa aprovação, esta seção é uma
+> proposta, não uma especificação consolidada.
 
 O desenho e o papel de cada peça estão em
 [TAREFAS-2BIM.md › Arquitetura](TAREFAS-2BIM.md#arquitetura). Em resumo, uma
@@ -478,7 +483,7 @@ repassa.
 
 | Campo | Regra |
 | --- | --- |
-| `id` | único por mensagem (UUID). Quem recebe o mesmo id duas vezes descarta a segunda |
+| `id` | UUID que identifica a mensagem. O UUID, por si só, não garante deduplicação; o mecanismo para detectar e descartar repetições ainda precisa ser definido e implementado |
 | `ts` | quando a leitura ou o evento aconteceu, em ISO 8601 UTC, e não quando chegou |
 | `type` | `telemetry`, `command`, `insight`, `alert`, `job_progress`, `model_updated` ou `status` |
 | `device` | id do cadastro (§15). Quando a mensagem não é de um dispositivo, vai o nome da origem: `sim` no status do simulador e `worker` no progresso de job |
@@ -486,6 +491,11 @@ repassa.
 
 O frontend confere essa forma antes de aceitar a mensagem (`isEnvelope`, em
 `frontend/src/live/envelope.ts`) e ignora o que não bater.
+
+O validador atual do frontend verifica a forma do envelope; ele não deduplica.
+O Writer também não descarta mensagens repetidas por `id`. Portanto, entrega
+duplicada pode ser processada mais de uma vez até que as frentes definam e
+implementem um mecanismo de idempotência.
 
 ### 12.1 Payload de cada tipo
 
@@ -596,8 +606,10 @@ bimestre (§2) sai, porque o broker agora é nosso e não o público.
 - **Last Will:** o simulador registra `{"online": false}` em
   `tankvitals/sim/status` ao conectar, e logo depois publica `{"online": true}`
   retained. Se ele cair sem se despedir, o Mosquitto publica o Last Will
-  sozinho. O `ts` desse envelope é o da conexão, então quem recebe usa a hora de
-  chegada.
+  sozinho. Como o broker publica o envelope pré-configurado, o `ts` do Last Will
+  é o horário da conexão, não o instante exato da queda. O consumidor usa o
+  horário de recebimento como momento em que observou o estado offline; esse
+  horário observado não substitui o `ts` original do envelope.
 - **ACL:** `simulator` publica em `tankvitals/+/+/+/telemetry` e em
   `tankvitals/sim/status` e só lê `tankvitals/+/+/+/cmd`; `gateway` faz o
   contrário. A porta 1883 fica aberta só em `127.0.0.1`.
@@ -667,7 +679,13 @@ Um usuário por serviço, sem `guest`. As senhas saem do `scripts/gerar_segredos
 
 O usuário `api` tem também a tag `monitoring`, para consultar a API de
 gerenciamento do RabbitMQ (`/api/queues`, `/api/overview`, `/api/consumers`) e
-montar a página Mensageria.
+montar a página Mensageria. A tag `monitoring` permite consultar estatísticas,
+mas não concede leitura do corpo das mensagens. A permissão `read` em `q.dlq`
+é necessária somente se a API buscar a amostra prevista para a tela; ela deve
+permanecer restrita a essa fila. Se a amostra for removida do contrato, retire
+também essa permissão. A leitura pela API de gerenciamento com
+`ack_requeue_true` recoloca a mensagem na fila; não equivale a uma consulta
+passiva de métricas.
 
 ---
 
@@ -683,7 +701,7 @@ tabela**, senão o dashboard e o 3D não reconhecem o dispositivo.
 | `temp-agua-01` | Termômetro da água | sensor | `temperature_c` | °C | 1 | normal de 24 a 28; crítico abaixo de 22 ou acima de 30 |
 | `ph-01` | Sonda de pH | sensor | `ph` | pH | 2 | normal de 6,5 a 8; crítico abaixo de 6 ou acima de 8,5 |
 | `nivel-01` | Sensor de nível | sensor | `level_pct` | % | 1 | normal a partir de 30; crítico abaixo de 15 |
-| `turbidez-01` | Turbidímetro | sensor | `turbidity_ntu` | NTU | 1 | normal até 40; crítico acima de 60 |
+| `turbidez-01` | Turbidímetro | sensor | `turbidity_ntu` | NTU | 1 | limite normal em 40 pendente de decisão; crítico acima de 60 |
 | `od-01` | Sonda de oxigênio | sensor | `oxygen_mg_l` | mg/L | 2 | normal a partir de 5; crítico abaixo de 3 |
 | `luz-01` | Sensor de luz | sensor | `light_lux` | lux | 0 | sem faixa: não gera alerta |
 | `bomba-rec-01` | Bomba de recirculação | equipment | `vibration_mm_s` | mm/s | 2 | normal até 2,8; crítico acima de 4,5 |
@@ -703,9 +721,15 @@ seed do front.
 - **Como a faixa classifica**, igual no backend e no front (`classify`, em
   `frontend/src/alerts.ts`): abaixo de `crit_min` ou acima de `crit_max` é
   crítico; fora de `ok_min`–`ok_max` é atenção; o resto é normal. **Os limites
-  contam como dentro**: 28 °C ainda é normal e 40 NTU também (no 1º bimestre,
-  40 NTU já era atenção, §5). Limite `null` quer dizer "sem limite daquele
-  lado".
+  contam como dentro**, salvo a pendência de turbidez descrita abaixo. Limite
+  `null` quer dizer "sem limite daquele lado".
+- **Turbidez em exatamente 40 NTU — decisão pendente da frente IoT:** o contrato
+  do 1º bimestre (§5) e o classificador atual do backend tratam 40 NTU como
+  atenção (`ok` abaixo de 40); o cadastro e o classificador do frontend no
+  modo simulado tratam 40 NTU como normal (`ok` até 40, inclusive). As duas
+  alternativas permanecem registradas; a frente IoT deve aprovar qual regra
+  será usada antes de consolidar esse limite. Nenhuma alteração de código é
+  feita nesta tarefa.
 - **Regra do aerador** (`aerador-od`): vigia `od-01.oxygen_mg_l`, liga o
   `aerador-01` abaixo de 5 mg/L e desliga a partir de 6,5.
 - **Cadastro novo pela tela:** id e zona só com letras minúsculas, números e
@@ -826,13 +850,14 @@ os tipos estão em `frontend/src/domain/devices.ts` e `frontend/src/domain/audit
 
 ### 17.4 Rotas das telas que ainda vão nascer
 
-Só o nome e para que servem. Quem fizer a tela detalha o formato aqui antes de
-começar.
+As rotas abaixo ainda não existem necessariamente no backend. Os formatos
+marcados como provisórios precisam ser aprovados pelas frentes responsáveis
+antes de orientar uma implementação.
 
 | Rota | Papel | Para quê | Tarefa |
 | --- | --- | --- | --- |
 | `GET /api/health` | (sem login) | estado da API e das dependências, para o healthcheck do compose | PLAT-03 |
-| `GET /api/messaging` | todos | filas, taxas, consumidores, últimas 50 mensagens da `q.ws` e amostra da DLQ | PLAT-07 |
+| `GET /api/messaging` | todos | métricas das filas, mensagens recentes encaminhadas pela `q.ws` e contagem/amostra da DLQ; formato provisório abaixo | PLAT-07 |
 | `POST /api/lab/jobs` | admin | pede a geração de dados com os parâmetros; responde na hora com o id do job | IA-03 |
 | `GET /api/lab/jobs` | todos | jobs de geração, com estado e progresso | IA-03 |
 | `GET /api/lab/datasets` | todos | datasets gerados, com tamanho e parâmetros | IA-03 |
@@ -840,3 +865,49 @@ começar.
 | `GET /api/models` | todos | versões dos modelos, com as métricas, a base de comparação e qual está em uso | IA-06 |
 | `POST /api/assistant` | todos | pergunta ao assistente; a resposta vem em streaming | BACK-09 |
 | `GET /api/assistant/status` | todos | se o modelo do Ollama já está carregado | BACK-09 |
+
+#### Contrato provisório de `GET /api/messaging`
+
+Esta rota ainda não está implementada. O exemplo abaixo propõe nomes e tipos
+para revisão de BACK, WEB e PLAT; não define onde nem por quanto tempo guardar
+mensagens recentes. A tarefa PLAT-07 solicita exibir as últimas 50 mensagens,
+mas um buffer em memória de 50 itens não foi aprovado como solução. A origem,
+a capacidade e a retenção dessas mensagens continuam pendentes.
+
+```json
+{
+  "queues": [
+    {
+      "name": "q.writer",
+      "messages_ready": 0,
+      "messages_unacknowledged": 0,
+      "publish_rate": 0.0,
+      "deliver_rate": 0.0,
+      "consumers": 1
+    }
+  ],
+  "recent_messages": [
+    {
+      "routing_key": "telemetry.tanque-01.sensor.od-01",
+      "message": {
+        "id": "0f6c1d0e-5b7a-4a43-9a52-7c3e2f1b9d10",
+        "ts": "2026-11-16T13:45:00Z",
+        "type": "telemetry",
+        "device": "od-01",
+        "payload": { "oxygen_mg_l": 6.82 }
+      }
+    }
+  ],
+  "dlq": {
+    "messages": 0,
+    "sample": []
+  }
+}
+```
+
+Os campos de `queues` representam contagens e taxas em mensagens por segundo.
+`recent_messages` é uma proposta de conteúdo, sem compromisso com um buffer
+volátil ou persistente. `dlq.messages` informa a quantidade na fila e `sample`
+é opcional enquanto a estratégia e a permissão de leitura não forem aprovadas.
+Se o RabbitMQ estiver indisponível, a resposta `503` com
+`{"detail":"RabbitMQ indisponível"}` também é uma proposta a aprovar.

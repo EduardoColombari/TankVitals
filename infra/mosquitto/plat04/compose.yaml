@@ -1,0 +1,18 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto@sha256:860aeb5d63ce509508f6dcfb2bc8a1c1dd2bc60555b562b45ce90e52d8dabb0f
+    restart: "no"
+    ports:
+      - "127.0.0.1:${PLAT04_MQTT_PORT:-1884}:1883"
+    environment:
+      MQTT_SIMULATOR_PASSWORD: ${MQTT_SIMULATOR_PASSWORD:?generate credentials with scripts/gerar_segredos.py}
+      MQTT_GATEWAY_PASSWORD: ${MQTT_GATEWAY_PASSWORD:?generate credentials with scripts/gerar_segredos.py}
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ../config/acl:/mosquitto/config/acl:ro
+      - ./start.sh:/mosquitto/config/start.sh:ro
+      - ./test-acl.sh:/mosquitto/config/test-acl.sh:ro
+    tmpfs:
+      - /run/mosquitto:mode=0700,uid=1883,gid=1883
+    command: ["/bin/sh", "/mosquitto/config/start.sh"]
+
