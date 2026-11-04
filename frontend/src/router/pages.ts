@@ -72,6 +72,7 @@ export const PAGES: PageDef[] = [
   },
   {
     path: 'laboratorio',
+    component: () => import('../views/LabView.vue'),
     name: 'laboratorio',
     title: 'Laboratório',
     icon: TestTubes,
@@ -82,6 +83,7 @@ export const PAGES: PageDef[] = [
   },
   {
     path: 'treinamento',
+    component: () => import('../views/TrainingView.vue'),
     name: 'treinamento',
     title: 'Treinamento',
     icon: BrainCircuit,

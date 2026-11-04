@@ -17,6 +17,16 @@ pydantic==2.10.5
 pydantic-settings==2.7.1
 python-dotenv==1.0.1
 
+# --- Modelo físico e IA ---
+numpy==2.5.4
+pyarrow==26.0.0
+scikit-learn==1.9.1
+joblib==1.5.3
+aio-pika==10.2.2
+sqlalchemy==2.1.8
+psycopg[binary]==3.3.8
+PyJWT==2.15.1
+
 # --- Testes (BE-09) ---
 pytest==8.3.4
 httpx==0.28.1

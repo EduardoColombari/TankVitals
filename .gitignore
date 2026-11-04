@@ -33,6 +33,9 @@ Thumbs.db
 # Build de firmware
 .pio/
 build/
+data/ai/
+backend/data/ai/
+backend/.test-tmp-ai*/
 
 # Senhas do Mosquitto (INFRA-03) - nunca versionar
 infra/mosquitto/config/passwd

@@ -90,7 +90,8 @@ def test_history_stats_thresholds_tanks_and_cors(service):
     response = service.client.get("/api/thresholds", headers={"Origin": "http://localhost:5173"})
     assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
     assert service.client.get("/docs").status_code == 200
-    assert len(service.client.get("/openapi.json").json()["paths"]) == 6
+    assert {"/api/health", "/api/thresholds", "/api/tanks", "/api/readings/latest",
+            "/api/readings/history", "/api/stats"} <= service.client.get("/openapi.json").json()["paths"].keys()
 
 
 @pytest.mark.parametrize("path,method", [

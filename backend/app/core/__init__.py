@@ -1,0 +1,1 @@
+"""Componentes compartilhados da simulação e da inteligência artificial."""
