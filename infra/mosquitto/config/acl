@@ -1,0 +1,12 @@
+# PLAT-04 proposal. Activate by referencing this file from mosquitto.conf only
+# after the shared broker configuration has been approved.
+
+user simulator
+topic write tankvitals/+/+/+/telemetry
+topic read tankvitals/+/+/+/cmd
+topic write tankvitals/sim/status
+
+user gateway
+topic read tankvitals/+/+/+/telemetry
+topic write tankvitals/+/+/+/cmd
+topic read tankvitals/sim/status

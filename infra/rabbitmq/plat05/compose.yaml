@@ -1,0 +1,48 @@
+services:
+  rabbitmq:
+    image: rabbitmq:4.1.3-management@sha256:93ade3d3fcd3290243fcad5ee45bd07b77c13844c2137f08608410f08f3575d6
+    env_file:
+      - ${PLAT05_ENV_FILE:?Set PLAT05_ENV_FILE to the generated PLAT-02 .env}
+    ports:
+      - "127.0.0.1:5673:5672"
+      - "127.0.0.1:15673:15672"
+    volumes:
+      - type: bind
+        source: rabbitmq.conf
+        target: /etc/rabbitmq/rabbitmq.conf
+        read_only: true
+      - rabbitmq_definitions:/run/plat05-definitions:ro
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+
+  test-client:
+    profiles: [test]
+    build:
+      context: ../../..
+      dockerfile: infra/rabbitmq/plat05/Dockerfile
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      RABBITMQ_API_PASSWORD: ${RABBITMQ_API_PASSWORD:?Missing generated API password}
+      RABBITMQ_GATEWAY_PASSWORD: ${RABBITMQ_GATEWAY_PASSWORD:?Missing generated gateway password}
+      RABBITMQ_WRITER_PASSWORD: ${RABBITMQ_WRITER_PASSWORD:?Missing generated writer password}
+      RABBITMQ_RULES_PASSWORD: ${RABBITMQ_RULES_PASSWORD:?Missing generated rules password}
+      RABBITMQ_INFERENCE_PASSWORD: ${RABBITMQ_INFERENCE_PASSWORD:?Missing generated inference password}
+      RABBITMQ_WORKER_PASSWORD: ${RABBITMQ_WORKER_PASSWORD:?Missing generated worker password}
+      PLAT05_TEST_MARKER: ${PLAT05_TEST_MARKER:?Set a unique PLAT05_TEST_MARKER}
+    command: ["before"]
+
+volumes:
+  rabbitmq_data:
+    name: ${COMPOSE_PROJECT_NAME:?Set a unique COMPOSE_PROJECT_NAME}-rabbitmq-data
+  rabbitmq_definitions:
+    external: true
+    name: ${COMPOSE_PROJECT_NAME:?Set a unique COMPOSE_PROJECT_NAME}-rabbitmq-definitions
+
