@@ -1,6 +1,7 @@
 ﻿"""API e ingestor no mesmo processo: uvicorn app.main:app --reload."""
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -42,7 +43,17 @@ def create_app(repo_factory=InfluxRepository, ingestor_factory=MqttIngestor) -> 
 
         ingestor = ingestor_factory(on_reading=on_reading, on_status=on_status, repository=repo)
         app.state.repo, app.state.ingestor, app.state.manager = repo, ingestor, manager
+        ai_bus, ai_store, ai_dispatcher = None, None, None
         try:
+            if os.environ.get("AI_DATABASE_URL"):
+                from app.ai_store import AIStore
+                from app.ai_transport import RabbitBus
+                from app.ai_api import dispatch_jobs
+                ai_store = await asyncio.to_thread(AIStore, os.environ["AI_DATABASE_URL"])
+                app.state.ai_store = ai_store
+                ai_bus = RabbitBus()
+                await ai_bus.connect(os.environ["RABBITMQ_URL"])
+                ai_dispatcher = asyncio.create_task(dispatch_jobs(ai_store, ai_bus))
             await asyncio.to_thread(ingestor.start)
             yield
         finally:
@@ -50,11 +61,18 @@ def create_app(repo_factory=InfluxRepository, ingestor_factory=MqttIngestor) -> 
             await asyncio.to_thread(ingestor.stop)
             await manager.close()
             await asyncio.to_thread(repo.close)
+            if ai_dispatcher:
+                ai_dispatcher.cancel()
+                await asyncio.gather(ai_dispatcher, return_exceptions=True)
+            if ai_bus and hasattr(ai_bus, "connection"):
+                await ai_bus.close()
+            if ai_store:
+                await asyncio.to_thread(ai_store.close)
 
     app = FastAPI(title="TankVitals API", version="0.1.0", lifespan=lifespan)
     app.add_middleware(CORSMiddleware,
                        allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
-                       allow_methods=["GET"], allow_headers=["*"])
+                       allow_methods=["GET", "POST"], allow_headers=["*"])
 
     @app.exception_handler(RepositoryUnavailable)
     async def unavailable(request: Request, exc: RepositoryUnavailable):
@@ -69,6 +87,8 @@ def create_app(repo_factory=InfluxRepository, ingestor_factory=MqttIngestor) -> 
         return JSONResponse({"detail": "Parâmetros inválidos"}, status_code=400)
 
     app.include_router(router)
+    from app.ai_api import router as ai_router
+    app.include_router(ai_router)
     app.add_api_websocket_route("/ws/live", live)
     return app
 
