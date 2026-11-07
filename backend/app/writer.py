@@ -8,6 +8,7 @@ import logging
 import math
 import os
 import re
+import sqlite3
 from pathlib import Path
 import uuid
 from datetime import datetime, timezone
@@ -119,13 +120,38 @@ def to_influx_record(body: bytes, routing_key: str) -> dict[str, Any]:
 class Writer:
     """Consumes in bounded batches and acknowledges only after a successful write."""
 
-    def __init__(self, queue: Any, channel: Any, write_api: Any, bucket: str, org: str) -> None:
+    def __init__(self, queue: Any, channel: Any, write_api: Any, bucket: str, org: str,
+                 dedup_path: str | Path = ":memory:") -> None:
         self.queue = queue
         self.channel = channel
         self.write_api = write_api
         self.bucket = bucket
         self.org = org
+        self.dedup_path = str(dedup_path)
+        Path(self.dedup_path).parent.mkdir(parents=True, exist_ok=True) if self.dedup_path != ":memory:" else None
+        self._dedup_db = sqlite3.connect(self.dedup_path, timeout=5, check_same_thread=False)
+        self._dedup_db.execute("CREATE TABLE IF NOT EXISTS processed_messages (message_id TEXT PRIMARY KEY, processed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+        self._dedup_db.commit()
         self.pending: asyncio.Queue[Any] = asyncio.Queue(maxsize=MAX_BATCH_SIZE)
+
+    def _was_processed(self, message_id: str) -> bool:
+        return self._dedup_db.execute("SELECT 1 FROM processed_messages WHERE message_id=?", (message_id,)).fetchone() is not None
+
+    def _mark_processed(self, message_ids: list[str]) -> None:
+        self._dedup_db.executemany("INSERT OR IGNORE INTO processed_messages(message_id) VALUES (?)",
+                                  [(message_id,) for message_id in message_ids])
+        self._dedup_db.commit()
+
+    def close(self) -> None:
+        self._dedup_db.close()
+
+    def __del__(self) -> None:
+        connection = getattr(self, "_dedup_db", None)
+        if connection is not None:
+            try:
+                connection.close()
+            except sqlite3.Error:
+                pass
 
     async def run(self) -> None:
         async def enqueue(message: Any) -> None:
@@ -151,33 +177,46 @@ class Writer:
             await self.queue.cancel(consumer_tag)
 
     async def _flush(self, batch: list[Any]) -> None:
-        valid: list[tuple[Any, dict[str, Any]]] = []
+        valid: list[tuple[Any, dict[str, Any], str]] = []
+        duplicate_messages: list[Any] = []
+        batch_ids: set[str] = set()
         for message in batch:
             try:
                 routing_key = (message.headers or {}).get(ORIGINAL_ROUTING_KEY_HEADER, message.routing_key)
                 if not isinstance(routing_key, str) or not routing_key:
                     raise ValueError("Retry message has no original routing key")
-                valid.append((message, to_influx_record(message.body, routing_key)))
+                parsed = json.loads(message.body.decode("utf-8"))
+                message_id = str(uuid.UUID(str(parsed["id"])))
+                record = to_influx_record(message.body, routing_key)
+                if message_id in batch_ids or self._was_processed(message_id):
+                    duplicate_messages.append(message)
+                else:
+                    batch_ids.add(message_id)
+                    valid.append((message, record, message_id))
             except (ValueError, TypeError) as exc:
                 logger.warning("Rejecting invalid q.writer message: %s", exc)
                 await message.reject(requeue=False)
 
         if not valid:
+            await asyncio.gather(*(message.ack() for message in duplicate_messages))
             return
         try:
             result = await self.write_api.write(
                 bucket=self.bucket,
                 org=self.org,
-                record=[record for _, record in valid],
+                record=[record for _, record, _ in valid],
             )
             if result is False:
                 raise RuntimeError("InfluxDB write API did not confirm the batch")
         except Exception as exc:
             logger.exception("InfluxDB batch write failed; scheduling retry/DLQ: %s", exc)
-            await asyncio.gather(*(self._retry_or_dead_letter(message) for message, _ in valid))
+            await asyncio.gather(*(self._retry_or_dead_letter(message) for message, _, _ in valid))
+            await asyncio.gather(*(message.ack() for message in duplicate_messages))
             return
 
-        await asyncio.gather(*(message.ack() for message, _ in valid))
+        self._mark_processed([message_id for _, _, message_id in valid])
+        await asyncio.gather(*(message.ack() for message, _, _ in valid),
+                             *(message.ack() for message in duplicate_messages))
 
     async def _retry_or_dead_letter(self, message: Any) -> None:
         headers = dict(message.headers or {})
@@ -248,7 +287,12 @@ async def _serve() -> None:
                 publisher_confirms=True,
                 on_return_raises=True,
             )
-            await Writer(queue, publisher_channel, client.write_api(), influx_bucket, influx_org).run()
+            writer = Writer(queue, publisher_channel, client.write_api(), influx_bucket, influx_org,
+                            dedup_path=os.getenv("WRITER_DEDUP_DB", "/var/lib/tankvitals-writer/dedup.sqlite"))
+            try:
+                await writer.run()
+            finally:
+                writer.close()
         finally:
             await connection.close()
 

@@ -8,14 +8,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements.txt requirements-iot.txt plat-requirements.txt ./
+COPY backend/requirements.txt backend/requirements-iot.txt backend/plat-requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt -r requirements-iot.txt -r plat-requirements.txt
 
-COPY app ./app
-COPY tools ./tools
+COPY backend/app ./app
+COPY backend/tools ./tools
+COPY scripts ./scripts
 
-RUN groupadd --system app && useradd --system --gid app --create-home app \
-    && chown -R app:app /app
+RUN groupadd --gid 10001 --system app && useradd --uid 10001 --system --gid app --create-home app \
+    && mkdir -p /var/lib/tankvitals /var/lib/tankvitals-writer \
+    && chown -R app:app /app /var/lib/tankvitals /var/lib/tankvitals-writer
 USER app
 
 EXPOSE 8000

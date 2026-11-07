@@ -2,6 +2,7 @@
 # after the shared broker configuration has been approved.
 
 user simulator
+topic write tankvitals/healthcheck
 topic write tankvitals/+/+/+/telemetry
 topic read tankvitals/+/+/+/cmd
 topic write tankvitals/sim/status

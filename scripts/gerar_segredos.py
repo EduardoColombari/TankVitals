@@ -140,6 +140,24 @@ def _merge_env(lines: list[str], values: dict[str, str], force: bool) -> tuple[s
     return "\n".join(rendered).rstrip() + "\n", generated
 
 
+def _set_env_value(env_text: str, key: str, value: str) -> str:
+    """Set a non-secret Compose path without disturbing unrelated dotenv entries."""
+    rendered: list[str] = []
+    found = False
+    for line in env_text.splitlines():
+        stripped = line.strip()
+        current = stripped.split("=", 1)[0].removeprefix("export ").strip() if "=" in stripped else ""
+        if current == key:
+            if not found:
+                rendered.append(f"{key}={value}")
+                found = True
+        else:
+            rendered.append(line)
+    if not found:
+        rendered.append(f"{key}={value}")
+    return "\n".join(rendered).rstrip() + "\n"
+
+
 def rabbit_password_hash(password: str, salt: bytes | None = None) -> str:
     """Return RabbitMQ's base64(salt || SHA256(salt || UTF8(password)))."""
     salt = secrets.token_bytes(4) if salt is None else salt
@@ -254,6 +272,8 @@ def generate(root: Path, force: bool = False, output: TextIO | None = None) -> N
         raise FileExistsError(f"{existing_path} já existe; use --force para regenerar os segredos.")
 
     rendered_env, passwords = _merge_env(env_lines, existing, force)
+    definitions_source = str(definitions_path.resolve()).replace("\\", "/")
+    rendered_env = _set_env_value(rendered_env, "RABBITMQ_DEFINITIONS_FILE", definitions_source)
     definitions = json.dumps(build_definitions(passwords), ensure_ascii=False, indent=2) + "\n"
 
     # Prepare both temporary files before replacing either output. This avoids

@@ -1,92 +1,360 @@
-# TankVitals — infraestrutura local (INFRA-01)
-# Subir com:  docker compose up -d
-# Contrato: docs/ARQUITETURA.md §4 e §8
-
+# TankVitals integrated second-bimester stack. Generate ignored local credentials first.
 services:
   mosquitto:
     image: eclipse-mosquitto:2
-    container_name: tankvitals-mosquitto
+    restart: unless-stopped
+    user: "1883:1883"
+    ports:
+      - "127.0.0.1:1883:1883"
+    environment:
+      MQTT_SIMULATOR_PASSWORD: ${MQTT_SIMULATOR_PASSWORD:?Run scripts/gerar_segredos.py first}
+      MQTT_GATEWAY_PASSWORD: ${MQTT_GATEWAY_PASSWORD:?Run scripts/gerar_segredos.py first}
+    entrypoint: ["/bin/sh", "/mosquitto/config/start-secure.sh"]
+    volumes:
+      - ./mosquitto/config/mosquitto-secure.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/config/start-secure.sh:/mosquitto/config/start-secure.sh:ro
+      - ./mosquitto/config/acl:/mosquitto/config/acl:ro
+      - mosquitto_data:/mosquitto/data
+    tmpfs:
+      - /run/mosquitto:rw,noexec,nosuid,size=1m,mode=0700,uid=1883,gid=1883
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_pub -h 127.0.0.1 -p 1883 -u simulator -P \"$$MQTT_SIMULATOR_PASSWORD\" -t tankvitals/healthcheck -m ok >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:4.1.3-management
     restart: unless-stopped
     ports:
-      - "1883:1883" # MQTT
-      - "9001:9001" # MQTT over WebSocket (reserva para o 2º bimestre)
+      - "127.0.0.1:15672:15672"
     volumes:
-      - ./mosquitto/config:/mosquitto/config
-      - ./mosquitto/data:/mosquitto/data
-      - ./mosquitto/log:/mosquitto/log
-    # A configuração fica em ./mosquitto/config/mosquitto.conf
-    # A configuração do broker da VM é a INFRA-03; a bridge do plano B, a INFRA-04.
+      - ./rabbitmq/main.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - type: bind
+        source: ${RABBITMQ_DEFINITIONS_FILE:-../secrets/definitions.json}
+        target: /run/plat/definitions.json
+        read_only: true
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
 
   influxdb:
     image: influxdb:2.7
-    container_name: tankvitals-influxdb
     restart: unless-stopped
     ports:
-      - "8086:8086"
+      - "127.0.0.1:8086:8086"
     environment:
-      # Setup automático: o banco já sobe pronto, com org, bucket e retenção
-      # criados, e ninguém precisa refazer o wizard ao recriar o container.
       DOCKER_INFLUXDB_INIT_MODE: setup
-      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUXDB_USERNAME:-tankvitals}
-      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_PASSWORD:-tankvitals123}
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUXDB_USERNAME:?Missing generated Influx username}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_PASSWORD:?Missing generated Influx password}
       DOCKER_INFLUXDB_INIT_ORG: unifacef
       DOCKER_INFLUXDB_INIT_BUCKET: tankvitals
       DOCKER_INFLUXDB_INIT_RETENTION: 30d
-      # Token fixo de DESENVOLVIMENTO, só para o banco desta máquina. O token
-      # que o backend usa de verdade é o gerado na interface, com escopo apenas
-      # do bucket tankvitals (INFRA-02) — este aqui é de admin.
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_ADMIN_TOKEN:-tankvitals-dev-token}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_ADMIN_TOKEN:?Missing generated Influx admin token}
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+      - influxdb_config:/etc/influxdb2
     healthcheck:
       test: ["CMD", "influx", "ping"]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 15s
-    volumes:
-      - influxdb-data:/var/lib/influxdb2
-      - influxdb-config:/etc/influxdb2
+      retries: 20
+      start_period: 20s
 
-  # Perfil "app": `docker compose up -d` continua subindo só a infraestrutura,
-  # que é o fluxo do README. A pilha inteira sobe com
-  # `docker compose --profile app up -d --build` (dashboard na 8080).
-
-  backend:
-    profiles: ["app"]
-    build:
-      context: ../backend
-    container_name: tankvitals-backend
+  postgres:
+    image: postgres:16-alpine
     restart: unless-stopped
-    ports:
-      - "8000:8000"
-    env_file:
-      - path: ../.env
-        required: false
     environment:
-      # Na rede do compose quem responde é o nome do serviço; localhost dentro
-      # do container é o próprio container.
-      MQTT_HOST: mosquitto
-      MQTT_PORT: 1883
+      POSTGRES_DB: ${POSTGRES_DB:?Missing generated Postgres database}
+      POSTGRES_USER: ${POSTGRES_USER:?Missing generated Postgres user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Missing generated Postgres password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ${POSTGRES_DB:?Missing generated Postgres database}
+      PGUSER: ${POSTGRES_USER:?Missing generated Postgres user}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Missing generated Postgres password}
+    volumes:
+      - ./postgres/init.sql:/migration/init.sql:ro
+    command: ["sh", "-ec", "until pg_isready; do sleep 1; done; psql -v ON_ERROR_STOP=1 -f /migration/init.sql"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  token-bootstrap:
+    image: tankvitals-app:local
+    pull_policy: never
+    user: "0:0"
+    restart: "no"
+    environment:
       INFLUX_URL: http://influxdb:8086
-      INFLUX_TOKEN: ${INFLUXDB_ADMIN_TOKEN:-tankvitals-dev-token}
-      CORS_ORIGINS: http://localhost:8080,http://localhost:5173
+      INFLUX_ORG: unifacef
+      INFLUX_BUCKET: tankvitals
+      INFLUXDB_ADMIN_TOKEN: ${INFLUXDB_ADMIN_TOKEN:?Missing generated Influx admin token}
+      INFLUX_API_TOKEN_FILE: /run/plat/secrets/influx_api.token
+    volumes:
+      - influx_tokens:/run/plat
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        if [ ! -s /run/plat/secrets/influx_writer.token ]; then python /app/scripts/bootstrap_influx_writer.py --url http://influxdb:8086 --org unifacef --bucket tankvitals --root /run/plat; fi
+        && if [ ! -s /run/plat/secrets/influx_api.token ]; then python /app/scripts/bootstrap_influx_api.py; fi
+        && chown -R 10001:10001 /run/plat/secrets
+        && chmod 0400 /run/plat/secrets/influx_writer.token /run/plat/secrets/influx_api.token
     depends_on:
       influxdb:
         condition: service_healthy
-      mosquitto:
-        condition: service_started
 
-  frontend:
-    profiles: ["app"]
+  api:
+    image: tankvitals-app:local
+    pull_policy: build
     build:
-      context: ../frontend
-    container_name: tankvitals-frontend
+      context: ..
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      MQTT_USERNAME: ${MQTT_GATEWAY_USERNAME:?Missing MQTT username}
+      MQTT_PASSWORD: ${MQTT_GATEWAY_PASSWORD:?Missing MQTT password}
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_ORG: unifacef
+      INFLUX_BUCKET: tankvitals
+      INFLUX_TOKEN_FILE: /run/plat/secrets/influx_api.token
+      RABBITMQ_URL: amqp://${RABBITMQ_API_USERNAME:?Missing RabbitMQ API user}:${RABBITMQ_API_PASSWORD:?Missing RabbitMQ API password}@rabbitmq:5672/%2F
+      RABBITMQ_MANAGEMENT_URL: http://rabbitmq:15672
+      RABBITMQ_API_USERNAME: ${RABBITMQ_API_USERNAME:?Missing RabbitMQ API user}
+      RABBITMQ_API_PASSWORD: ${RABBITMQ_API_PASSWORD:?Missing RabbitMQ API password}
+      JWT_SECRET: ${JWT_SECRET_KEY:?Missing generated JWT secret}
+      DEMO_VIEWER_PASSWORD: ${DEMO_VIEWER_PASSWORD:?Missing generated viewer password}
+      DEMO_OPERATOR_PASSWORD: ${DEMO_OPERATOR_PASSWORD:?Missing generated operator password}
+      DEMO_ADMIN_PASSWORD: ${DEMO_ADMIN_PASSWORD:?Missing generated admin password}
+      AI_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?Missing Postgres user}:${POSTGRES_PASSWORD:?Missing Postgres password}@postgres:5432/${POSTGRES_DB:?Missing Postgres database}
+      AI_DATA_DIR: /var/lib/tankvitals/ai
+      MESSAGING_DB_PATH: /var/lib/tankvitals/messaging.sqlite
+      CORS_ORIGINS: http://localhost:8080
+    volumes:
+      - influx_tokens:/run/plat:ro
+      - app_data:/var/lib/tankvitals
+    depends_on:
+      influxdb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      token-bootstrap:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  gateway:
+    image: tankvitals-app:local
+    pull_policy: never
+    restart: unless-stopped
+    command: ["python", "-m", "app.gateway"]
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      MQTT_USERNAME: ${MQTT_GATEWAY_USERNAME:?Missing MQTT gateway user}
+      MQTT_PASSWORD: ${MQTT_GATEWAY_PASSWORD:?Missing MQTT gateway password}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USER: ${RABBITMQ_GATEWAY_USERNAME:?Missing RabbitMQ gateway user}
+      RABBITMQ_PASSWORD: ${RABBITMQ_GATEWAY_PASSWORD:?Missing RabbitMQ gateway password}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('mosquitto',1883),2).close(); socket.create_connection(('rabbitmq',5672),2).close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  writer:
+    image: tankvitals-app:local
+    pull_policy: never
+    restart: unless-stopped
+    command: ["python", "-m", "app.writer"]
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_WRITER_USERNAME: ${RABBITMQ_WRITER_USERNAME:?Missing RabbitMQ Writer user}
+      RABBITMQ_WRITER_PASSWORD: ${RABBITMQ_WRITER_PASSWORD:?Missing RabbitMQ Writer password}
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_ORG: unifacef
+      INFLUX_BUCKET: tankvitals
+      INFLUX_TOKEN_FILE: /run/plat/secrets/influx_writer.token
+      WRITER_DEDUP_DB: /var/lib/tankvitals-writer/dedup.sqlite
+    volumes:
+      - influx_tokens:/run/plat:ro
+      - writer_dedup:/var/lib/tankvitals-writer
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+      token-bootstrap:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('rabbitmq',5672),2).close(); socket.create_connection(('influxdb',8086),2).close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  rules:
+    image: tankvitals-app:local
+    pull_policy: never
+    restart: unless-stopped
+    command: ["python", "-m", "app.rules"]
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USER: ${RABBITMQ_RULES_USERNAME:?Missing RabbitMQ rules user}
+      RABBITMQ_PASSWORD: ${RABBITMQ_RULES_PASSWORD:?Missing RabbitMQ rules password}
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER:?Missing Postgres user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Missing Postgres password}
+      POSTGRES_DB: ${POSTGRES_DB:?Missing Postgres database}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('rabbitmq',5672),2).close(); socket.create_connection(('postgres',5432),2).close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  inference:
+    image: tankvitals-app:local
+    pull_policy: never
+    restart: unless-stopped
+    command: ["python", "-m", "app.inference"]
+    environment:
+      RABBITMQ_URL: amqp://${RABBITMQ_INFERENCE_USERNAME:?Missing RabbitMQ inference user}:${RABBITMQ_INFERENCE_PASSWORD:?Missing RabbitMQ inference password}@rabbitmq:5672/%2F
+      AI_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?Missing Postgres user}:${POSTGRES_PASSWORD:?Missing Postgres password}@postgres:5432/${POSTGRES_DB:?Missing Postgres database}
+      AI_DATA_DIR: /var/lib/tankvitals/ai
+    volumes:
+      - app_data:/var/lib/tankvitals
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('rabbitmq',5672),2).close(); socket.create_connection(('postgres',5432),2).close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    image: tankvitals-app:local
+    pull_policy: never
+    restart: unless-stopped
+    command: ["python", "-m", "app.worker"]
+    environment:
+      RABBITMQ_URL: amqp://${RABBITMQ_WORKER_USERNAME:?Missing RabbitMQ worker user}:${RABBITMQ_WORKER_PASSWORD:?Missing RabbitMQ worker password}@rabbitmq:5672/%2F
+      AI_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?Missing Postgres user}:${POSTGRES_PASSWORD:?Missing Postgres password}@postgres:5432/${POSTGRES_DB:?Missing Postgres database}
+      AI_DATA_DIR: /var/lib/tankvitals/ai
+      INFLUX_TOKEN_FILE: /run/plat/secrets/influx_api.token
+    volumes:
+      - influx_tokens:/run/plat:ro
+      - app_data:/var/lib/tankvitals
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('rabbitmq',5672),2).close(); socket.create_connection(('postgres',5432),2).close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  simulator:
+    image: tankvitals-app:local
+    pull_policy: never
+    restart: unless-stopped
+    command: ["python", "-m", "app.simulator"]
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      MQTT_USERNAME: ${MQTT_SIMULATOR_USERNAME:?Missing MQTT simulator user}
+      MQTT_PASSWORD: ${MQTT_SIMULATOR_PASSWORD:?Missing MQTT simulator password}
+      SIM_SPEED: ${SIM_SPEED:-60}
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('mosquitto',1883),2).close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4:8
     restart: unless-stopped
     ports:
-      # 8080 para não brigar com o `npm run dev` na 5173.
-      - "8080:80"
+      - "127.0.0.1:5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:?Missing pgAdmin email}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:?Missing pgAdmin password}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_ALLOW_SPECIAL_EMAIL_DOMAINS: "['local']"
     depends_on:
-      - backend
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ../frontend
+      args:
+        VITE_MOCK: "false"
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
 
 volumes:
-  influxdb-data:
-  influxdb-config:
+  mosquitto_data:
+  rabbitmq_data:
+  influxdb_data:
+  influxdb_config:
+  postgres_data:
+  influx_tokens:
+  app_data:
+  writer_dedup:

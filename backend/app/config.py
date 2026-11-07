@@ -28,7 +28,8 @@ class Settings(BaseSettings):
     # InfluxDB
     # -------------------------
     influx_url: str = "http://localhost:8086"
-    influx_token: str
+    influx_token: str = ""
+    influx_token_file: str | None = None
     influx_org: str = "unifacef"
     influx_bucket: str = "tankvitals"
 
@@ -81,3 +82,8 @@ class Settings(BaseSettings):
 
 # Instância única importada pelo resto da aplicação.
 settings = Settings()
+if settings.influx_token_file:
+    try:
+        settings.influx_token = Path(settings.influx_token_file).read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise RuntimeError("Could not read the configured InfluxDB token file") from exc

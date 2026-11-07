@@ -5,6 +5,8 @@ from fastapi.responses import JSONResponse
 from app.alerts import RANGES
 from app.influx_repo import validate_query
 from app.presentation import present_reading, utc_time
+from app.messaging import consume_ws_ticket
+import os
 
 router = APIRouter(prefix="/api")
 
@@ -109,7 +111,10 @@ class ConnectionManager:
             await self.disconnect(websocket)
 
 
-async def live(websocket: WebSocket, tank_id: str = "tanque-01") -> None:
+async def live(websocket: WebSocket, tank_id: str = "tanque-01", ticket: str | None = None) -> None:
+    if os.getenv("JWT_SECRET") and not consume_ws_ticket(ticket):
+        await websocket.close(code=1008)
+        return
     try:
         validate_query(tank_id)
     except ValueError:
