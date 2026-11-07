@@ -8,11 +8,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements-iot.txt plat-requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-iot.txt -r plat-requirements.txt
 
 COPY app ./app
 COPY tools ./tools
+
+RUN groupadd --system app && useradd --system --gid app --create-home app \
+    && chown -R app:app /app
+USER app
 
 EXPOSE 8000
 

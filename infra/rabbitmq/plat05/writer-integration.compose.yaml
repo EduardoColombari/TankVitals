@@ -1,0 +1,131 @@
+# Isolated PLAT-06 RabbitMQ -> Writer -> InfluxDB validation stack.
+# Every volume and container is scoped by the unique Compose project name.
+services:
+  rabbitmq:
+    image: rabbitmq:4.1.3-management@sha256:93ade3d3fcd3290243fcad5ee45bd07b77c13844c2137f08608410f08f3575d6
+    env_file:
+      - ${PLAT06_ENV_FILE:?Set PLAT06_ENV_FILE to the isolated generated .env}
+    volumes:
+      - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - rabbitmq_definitions:/run/plat05-definitions:ro
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  influxdb:
+    image: influxdb:2.7.12
+    env_file:
+      - ${PLAT06_ENV_FILE:?Set PLAT06_ENV_FILE to the isolated generated .env}
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUXDB_USERNAME:?Missing generated Influx username}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_PASSWORD:?Missing generated Influx password}
+      DOCKER_INFLUXDB_INIT_ORG: unifacef
+      DOCKER_INFLUXDB_INIT_BUCKET: tankvitals
+      DOCKER_INFLUXDB_INIT_RETENTION: 30d
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_ADMIN_TOKEN:?Missing generated Influx admin token}
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+      - influxdb_config:/etc/influxdb2
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  token-bootstrap:
+    image: ${COMPOSE_PROJECT_NAME:?Set unique COMPOSE_PROJECT_NAME}-writer-test
+    build:
+      context: ../../..
+      dockerfile: infra/rabbitmq/plat05/writer-test.Dockerfile
+      args:
+        AIO_PIKA_VERSION: ${PLAT06_AIO_PIKA_VERSION:-10.2.2}
+    command: ["python", "/app/bootstrap_influx_writer.py", "--url", "http://influxdb:8086", "--root", "/run/plat06"]
+    environment:
+      INFLUXDB_ADMIN_TOKEN: ${INFLUXDB_ADMIN_TOKEN:?Missing generated Influx admin token}
+      INFLUX_ORG: unifacef
+      INFLUX_BUCKET: tankvitals
+    volumes:
+      - writer_token:/run/plat06/secrets
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    restart: "no"
+
+  influx-fault-proxy:
+    image: ${COMPOSE_PROJECT_NAME:?Set unique COMPOSE_PROJECT_NAME}-test-tools
+    build:
+      context: ../../..
+      dockerfile: infra/rabbitmq/plat05/writer-tools.Dockerfile
+    environment:
+      INFLUX_UPSTREAM: http://influxdb:8086
+      FAULT_PROXY_PORT: "8087"
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    command: ["python", "/opt/plat06/fault_proxy.py"]
+    restart: unless-stopped
+
+  writer:
+    image: ${COMPOSE_PROJECT_NAME:?Set unique COMPOSE_PROJECT_NAME}-writer-test
+    env_file:
+      - ${PLAT06_ENV_FILE:?Set PLAT06_ENV_FILE to the isolated generated .env}
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_VHOST: /
+      INFLUX_URL: http://influx-fault-proxy:8087
+      INFLUX_ORG: unifacef
+      INFLUX_BUCKET: tankvitals
+      INFLUX_TOKEN_FILE: /run/plat06/secrets/influx_writer.token
+      PLAT06_RESTART_VALUE: ${PLAT06_RESTART_VALUE:-0}
+    volumes:
+      - writer_token:/run/plat06/secrets:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      token-bootstrap:
+        condition: service_completed_successfully
+      influx-fault-proxy:
+        condition: service_started
+    command: ["python", "/app/writer.py"]
+    restart: unless-stopped
+
+  test-client:
+    profiles: [test]
+    image: ${COMPOSE_PROJECT_NAME:?Set unique COMPOSE_PROJECT_NAME}-test-tools
+    env_file:
+      - ${PLAT06_ENV_FILE:?Set PLAT06_ENV_FILE to the isolated generated .env}
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUX_ORG: unifacef
+      INFLUX_BUCKET: tankvitals
+      FAULT_PROXY_URL: http://influx-fault-proxy:8087
+      INFLUX_TOKEN_FILE: /run/plat06/secrets/influx_writer.token
+      PLAT06_RESTART_VALUE: ${PLAT06_RESTART_VALUE:-0}
+    volumes:
+      - writer_token:/run/plat06/secrets:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+      writer:
+        condition: service_started
+    command: ["python", "/opt/plat06/writer_influx_test.py"]
+
+volumes:
+  rabbitmq_data:
+  influxdb_data:
+  influxdb_config:
+  writer_token:
+  rabbitmq_definitions:
+    external: true
+    name: ${PLAT06_DEFINITIONS_VOLUME:?Set the unique PLAT06 definitions volume}

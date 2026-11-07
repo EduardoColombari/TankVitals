@@ -23,6 +23,7 @@ class RabbitDefinitionsContractTests(unittest.TestCase):
                 "tv.insights": "topic",
                 "tv.events": "topic",
                 "tv.jobs": "direct",
+                "tv.writer.retry": "direct",
                 "tv.dlx": "fanout",
             },
         )
@@ -46,6 +47,7 @@ class RabbitDefinitionsContractTests(unittest.TestCase):
             {
                 ("tv.telemetry", "telemetry.#", "q.writer"),
                 ("tv.insights", "#", "q.writer"),
+                ("tv.writer.retry", "retry", "q.writer"),
                 ("tv.telemetry", "telemetry.*.equipment.*", "q.inference"),
                 ("tv.events", "model.updated", "q.inference"),
                 ("tv.jobs", "datagen", "q.jobs.datagen"),
@@ -58,7 +60,7 @@ class RabbitDefinitionsContractTests(unittest.TestCase):
         expected = {
             "api": ("^(?:q\\.ws|q\\.dlq)$", "^(?:tv\\.commands|tv\\.jobs)$", "monitoring"),
             "gateway": ("^(?:q\\.commands)$", "^(?:tv\\.telemetry|tv\\.dlx)$", ""),
-            "writer": ("^(?:q\\.writer)$", "^$", ""),
+            "writer": ("^(?:q\\.writer)$", "^(?:tv\\.writer\\.retry)$", ""),
             "rules": ("^(?:q\\.rules)$", "^(?:tv\\.commands|tv\\.events)$", ""),
             "inference": ("^(?:q\\.inference)$", "^(?:tv\\.insights|tv\\.events)$", ""),
             "worker": ("^(?:q\\.jobs\\.datagen|q\\.jobs\\.train)$", "^(?:tv\\.events)$", ""),

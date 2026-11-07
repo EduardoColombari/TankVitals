@@ -8,6 +8,7 @@ import logging
 import math
 import os
 import re
+from pathlib import Path
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -16,9 +17,12 @@ from urllib.parse import quote
 
 logger = logging.getLogger("tankvitals.writer")
 RETRY_HEADER = "x-plat-write-retries"
+ORIGINAL_ROUTING_KEY_HEADER = "x-plat-original-routing-key"
+RETRY_EXCHANGE = "tv.writer.retry"
 FIELD_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 MAX_BATCH_SIZE = 200
 MAX_WRITE_RETRIES = 2
+RETRY_BACKOFF_S = (1.0, 2.0)
 FLUSH_INTERVAL_S = 0.25
 
 
@@ -33,6 +37,23 @@ def _parse_timestamp(value: Any) -> datetime:
     if timestamp.tzinfo is None:
         raise ValueError("Envelope ts must include a timezone")
     return timestamp.astimezone(timezone.utc)
+
+
+def _influx_token() -> str:
+    """Read the Writer-scoped token from a mounted secret file when configured."""
+    token_file = os.getenv("INFLUX_TOKEN_FILE")
+    if token_file:
+        try:
+            token = Path(token_file).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise RuntimeError("Could not read InfluxDB token file") from exc
+    else:
+        token = os.getenv("INFLUX_TOKEN", "").strip()
+        if token:
+            logger.warning("INFLUX_TOKEN_FILE is unset; using INFLUX_TOKEN environment variable")
+    if not token:
+        raise RuntimeError("Set INFLUX_TOKEN_FILE to a non-empty Writer-scoped token file")
+    return token
 
 
 def to_influx_record(body: bytes, routing_key: str) -> dict[str, Any]:
@@ -133,7 +154,10 @@ class Writer:
         valid: list[tuple[Any, dict[str, Any]]] = []
         for message in batch:
             try:
-                valid.append((message, to_influx_record(message.body, message.routing_key)))
+                routing_key = (message.headers or {}).get(ORIGINAL_ROUTING_KEY_HEADER, message.routing_key)
+                if not isinstance(routing_key, str) or not routing_key:
+                    raise ValueError("Retry message has no original routing key")
+                valid.append((message, to_influx_record(message.body, routing_key)))
             except (ValueError, TypeError) as exc:
                 logger.warning("Rejecting invalid q.writer message: %s", exc)
                 await message.reject(requeue=False)
@@ -167,9 +191,11 @@ class Writer:
             return
 
         headers[RETRY_HEADER] = retries + 1
+        headers.setdefault(ORIGINAL_ROUTING_KEY_HEADER, message.routing_key)
         try:
             import aio_pika
 
+            await asyncio.sleep(RETRY_BACKOFF_S[min(retries, len(RETRY_BACKOFF_S) - 1)])
             retry = aio_pika.Message(
                 body=message.body,
                 headers=headers,
@@ -179,17 +205,18 @@ class Writer:
                 message_id=message.message_id,
                 delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
             )
-            confirmed = await self.channel.default_exchange.publish(
+            exchange = await self.channel.get_exchange(RETRY_EXCHANGE, ensure=False)
+            confirmed = await exchange.publish(
                 retry,
-                routing_key="q.writer",
+                routing_key="retry",
                 mandatory=True,
             )
             if confirmed is False:
                 raise RuntimeError("RabbitMQ did not confirm retry publication")
         except Exception:
-            # Keep the original delivery when republishing cannot be confirmed.
-            logger.exception("Could not republish q.writer retry; requeueing original")
-            await message.nack(requeue=True)
+            # Do not requeue forever: failed retry publication is dead-lettered.
+            logger.exception("Could not publish q.writer retry; dead-lettering original")
+            await message.reject(requeue=False)
             return
         await message.ack()
 
@@ -207,7 +234,7 @@ async def _serve() -> None:
         vhost = quote(os.getenv("RABBITMQ_VHOST", "/"), safe="")
         rabbit_url = f"amqp://{username}:{password}@{host}:{port}/{vhost}"
     influx_url = os.environ["INFLUX_URL"]
-    influx_token = os.environ["INFLUX_TOKEN"]
+    influx_token = _influx_token()
     influx_org = os.getenv("INFLUX_ORG", "unifacef")
     influx_bucket = os.getenv("INFLUX_BUCKET", "tankvitals")
 

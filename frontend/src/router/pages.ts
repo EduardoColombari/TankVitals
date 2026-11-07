@@ -118,6 +118,7 @@ export const PAGES: PageDef[] = [
     title: 'Mensageria',
     icon: Workflow,
     group: 'Sistema',
+    component: () => import('../views/MessagingView.vue'),
     task: 'PLAT-07',
     description: 'O RabbitMQ ao vivo: filas, taxas, consumidores, últimas mensagens e a DLQ.',
   },

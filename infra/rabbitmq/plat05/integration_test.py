@@ -85,6 +85,7 @@ def verify_topology() -> None:
         "tv.insights": "topic",
         "tv.events": "topic",
         "tv.jobs": "direct",
+        "tv.writer.retry": "direct",
         "tv.dlx": "fanout",
     }
     actual_exchanges = {item["name"]: item["type"] for item in exchanges if item["name"] in expected_exchanges}
@@ -108,6 +109,7 @@ def verify_topology() -> None:
     expected_bindings = {
         ("tv.telemetry", "telemetry.#", "q.writer"),
         ("tv.insights", "#", "q.writer"),
+        ("tv.writer.retry", "retry", "q.writer"),
         ("tv.telemetry", "telemetry.*.equipment.*", "q.inference"),
         ("tv.events", "model.updated", "q.inference"),
         ("tv.dlx", "#", "q.dlq"),
@@ -212,11 +214,13 @@ def verify_permissions_and_delivery() -> None:
         lambda channel: channel.basic_publish("tv.telemetry", route, b"{}"),
     )
     expect_access_refused("writer", lambda channel: channel.basic_publish("", "q.writer", body))
-    print(
-        "BLOCKER: generated Writer permission denies its retry publish to RabbitMQ's "
-        "amq.default exchange; PLAT-02 change required.",
-        flush=True,
-    )
+    writer = connect("writer")
+    publish(writer.channel(), "tv.writer.retry", "retry", body)
+    writer.close()
+    connection, channel, method, _, received = get_one("writer", "q.writer")
+    check(method is not None and received == body, "writer's dedicated retry exchange routes back to q.writer")
+    channel.basic_ack(method.delivery_tag)
+    connection.close()
     expect_access_refused("writer", lambda channel: channel.basic_get("q.dlq", auto_ack=True))
 
     gateway = connect("gateway")

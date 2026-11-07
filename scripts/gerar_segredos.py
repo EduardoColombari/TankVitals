@@ -29,7 +29,8 @@ DEFINITIONS_PATH = Path("secrets") / "definitions.json"
 RABBIT_USERS: dict[str, tuple[str, tuple[str, ...], tuple[str, ...]]] = {
     "api": ("monitoring", ("q.ws", "q.dlq"), ("tv.commands", "tv.jobs")),
     "gateway": ("", ("q.commands",), ("tv.telemetry", "tv.dlx")),
-    "writer": ("", ("q.writer",), ()),
+    # The Writer may publish only into its dedicated retry exchange.
+    "writer": ("", ("q.writer",), ("tv.writer.retry",)),
     "rules": ("", ("q.rules",), ("tv.commands", "tv.events")),
     "inference": ("", ("q.inference",), ("tv.insights", "tv.events")),
     "worker": ("", ("q.jobs.datagen", "q.jobs.train"), ("tv.events",)),
@@ -176,6 +177,7 @@ def build_definitions(passwords: dict[str, str]) -> dict[str, object]:
         ("tv.insights", "topic"),
         ("tv.events", "topic"),
         ("tv.jobs", "direct"),
+        ("tv.writer.retry", "direct"),
         ("tv.dlx", "fanout"),
     ]
     exchange_defs = [
@@ -184,7 +186,11 @@ def build_definitions(passwords: dict[str, str]) -> dict[str, object]:
     ]
 
     queue_bindings = {
-        "q.writer": (("tv.telemetry", "telemetry.#"), ("tv.insights", "#")),
+        "q.writer": (
+            ("tv.telemetry", "telemetry.#"),
+            ("tv.insights", "#"),
+            ("tv.writer.retry", "retry"),
+        ),
         "q.ws": (("tv.telemetry", "#"), ("tv.insights", "#"), ("tv.events", "#")),
         "q.rules": (("tv.telemetry", "telemetry.#"),),
         "q.inference": (("tv.telemetry", "telemetry.*.equipment.*"), ("tv.events", "model.updated")),

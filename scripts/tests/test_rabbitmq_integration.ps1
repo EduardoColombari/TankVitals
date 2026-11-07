@@ -13,17 +13,21 @@ $marker = "plat05-$([guid]::NewGuid().ToString('N'))"
 $composeArgs = @("compose", "-p", $projectName, "--env-file", $envPath, "-f", $composeFile)
 $definitionsVolume = "$projectName-rabbitmq-definitions"
 $seedContainer = "$projectName-definitions-seed"
+$docker = Get-Command docker -ErrorAction SilentlyContinue
+$python = Get-Command $Python -ErrorAction SilentlyContinue
 $definitionsVolumeCreated = $false
 $seedContainerCreated = $false
+$runtimeCreated = $false
 $savedVariables = @{}
 foreach ($name in @("PLAT05_ENV_FILE", "PLAT05_TEST_MARKER", "COMPOSE_PROJECT_NAME")) {
     $savedVariables[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
 }
+. (Join-Path $PSScriptRoot "NativeProcess.ps1")
 
 function Invoke-DockerCompose([string[]]$Arguments) {
-    & docker @composeArgs @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "docker compose failed with exit code $LASTEXITCODE"
+    $result = Invoke-CapturedProcess $script:docker.Source ($script:composeArgs + $Arguments) $script:repoRoot
+    if ($result.ExitCode -ne 0) {
+        throw "docker compose failed; diagnostics omitted."
     }
 }
 
@@ -35,32 +39,36 @@ try {
         throw "Refusing to reuse an existing temporary path: $runtimeRoot"
     }
 
-    & $Python -m unittest scripts.tests.test_rabbitmq_definitions_plat05 -v
-    if ($LASTEXITCODE -ne 0) {
-        throw "PLAT-05 definition contract tests failed with exit code $LASTEXITCODE"
+    if (-not $docker) { throw "Docker CLI is unavailable." }
+    if (-not $python) { throw "Python executable is unavailable." }
+
+    $unitTests = Invoke-CapturedProcess $python.Source @("-m", "unittest", "scripts.tests.test_rabbitmq_definitions_plat05", "-v") $repoRoot
+    if ($unitTests.ExitCode -ne 0) {
+        throw "PLAT-05 definition contract tests failed; diagnostics omitted."
     }
 
     New-Item -ItemType Directory -Path $runtimeRoot | Out-Null
-    $null = & $Python (Join-Path $repoRoot "scripts/gerar_segredos.py") --output-dir $runtimeRoot 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "PLAT-02 secret generation failed with exit code $LASTEXITCODE"
+    $runtimeCreated = $true
+    $generation = Invoke-CapturedProcess $python.Source @((Join-Path $repoRoot "scripts/gerar_segredos.py"), "--output-dir", $runtimeRoot) $repoRoot
+    if ($generation.ExitCode -ne 0) {
+        throw "PLAT-02 secret generation failed; diagnostics omitted."
     }
 
     $env:PLAT05_ENV_FILE = $envPath
     $env:PLAT05_TEST_MARKER = $marker
     $env:COMPOSE_PROJECT_NAME = $projectName
 
-    & docker volume create $definitionsVolume | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Could not create the isolated RabbitMQ definitions volume" }
+    $volume = Invoke-CapturedProcess $docker.Source @("volume", "create", $definitionsVolume) $repoRoot
+    if ($volume.ExitCode -ne 0) { throw "Could not create the isolated RabbitMQ definitions volume" }
     $definitionsVolumeCreated = $true
     Invoke-DockerCompose @("build", "test-client")
-    & docker create --name $seedContainer --mount "source=$definitionsVolume,target=/seed" "python:3.12.10-slim-bookworm@sha256:fd95fa221297a88e1cf49c55ec1828edd7c5a428187e67b5d1805692d11588db" sleep 300 | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Could not create the temporary definitions-volume seeder" }
+    $seed = Invoke-CapturedProcess $docker.Source @("create", "--name", $seedContainer, "--mount", "source=$definitionsVolume,target=/seed", "python:3.12.10-slim-bookworm@sha256:fd95fa221297a88e1cf49c55ec1828edd7c5a428187e67b5d1805692d11588db", "sleep", "300") $repoRoot
+    if ($seed.ExitCode -ne 0) { throw "Could not create the temporary definitions-volume seeder" }
     $seedContainerCreated = $true
-    & docker cp $definitionsPath "${seedContainer}:/seed/definitions.json"
-    if ($LASTEXITCODE -ne 0) { throw "Could not copy generated definitions into the isolated volume" }
-    & docker rm $seedContainer | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Could not remove the temporary definitions-volume seeder" }
+    $copy = Invoke-CapturedProcess $docker.Source @("cp", $definitionsPath, "${seedContainer}:/seed/definitions.json") $repoRoot
+    if ($copy.ExitCode -ne 0) { throw "Could not copy generated definitions into the isolated volume" }
+    $removeSeed = Invoke-CapturedProcess $docker.Source @("rm", $seedContainer) $repoRoot
+    if ($removeSeed.ExitCode -ne 0) { throw "Could not remove the temporary definitions-volume seeder" }
     $seedContainerCreated = $false
 
     Invoke-DockerCompose @("up", "-d", "--wait", "rabbitmq")
@@ -72,27 +80,27 @@ try {
 }
 finally {
     try {
-        if (Test-Path -LiteralPath $definitionsPath) {
+        if ($runtimeCreated -and (Test-Path -LiteralPath $definitionsPath)) {
             $env:PLAT05_ENV_FILE = $envPath
             $env:PLAT05_TEST_MARKER = $marker
             $env:COMPOSE_PROJECT_NAME = $projectName
             # The unique Compose project name scopes removal to this run's broker, network, and volume.
-            & docker @composeArgs down --volumes --remove-orphans
-            if ($LASTEXITCODE -ne 0) {
+            $cleanup = Invoke-CapturedProcess $docker.Source ($composeArgs + @("down", "--volumes", "--remove-orphans")) $repoRoot
+            if ($cleanup.ExitCode -ne 0) {
                 Write-Warning "Compose cleanup failed; inspect only project $projectName before retrying cleanup."
             }
         }
         if ($seedContainerCreated) {
-            & docker rm -f $seedContainer | Out-Null
+            $null = Invoke-CapturedProcess $docker.Source @("rm", "-f", $seedContainer) $repoRoot
         }
         if ($definitionsVolumeCreated) {
-            & docker volume rm $definitionsVolume | Out-Null
-            if ($LASTEXITCODE -ne 0) {
+            $removeVolume = Invoke-CapturedProcess $docker.Source @("volume", "rm", $definitionsVolume) $repoRoot
+            if ($removeVolume.ExitCode -ne 0) {
                 Write-Warning "Could not remove the PLAT-05 definitions volume $definitionsVolume; verify it is unused before retrying cleanup."
             }
         }
 
-        if (Test-Path -LiteralPath $runtimeRoot) {
+        if ($runtimeCreated -and (Test-Path -LiteralPath $runtimeRoot)) {
             $resolvedTemp = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
             $resolvedRuntime = [System.IO.Path]::GetFullPath($runtimeRoot)
             if (-not $resolvedRuntime.StartsWith($resolvedTemp, [System.StringComparison]::OrdinalIgnoreCase) -or
