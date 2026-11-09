@@ -26,6 +26,10 @@ aio-pika==10.2.2
 sqlalchemy==2.1.8
 psycopg[binary]==3.3.8
 PyJWT==2.15.1
+aiomqtt==2.3.0
+alembic==1.14.1
+bcrypt==4.2.1
+pandas==2.2.3
 
 # --- Testes (BE-09) ---
 pytest==8.3.4

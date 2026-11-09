@@ -14,7 +14,7 @@ router = APIRouter(prefix="/api")
 @router.get("/health")
 def health(request: Request):
     db = request.app.state.repo.ping()
-    mqtt = request.app.state.ingestor.client.is_connected()
+    mqtt = bool(os.getenv('RABBITMQ_URL')) or request.app.state.ingestor.client.is_connected()
     payload = {"status": "ok" if db and mqtt else "degraded", "influxdb": db, "mqtt": mqtt}
     if not db or not mqtt:
         payload["detail"] = "Um ou mais serviços estão indisponíveis"
@@ -100,7 +100,8 @@ class ConnectionManager:
 
     async def broadcast(self, event: dict) -> None:
         for websocket, (tank_id, queue) in list(self.active.items()):
-            if tank_id == event["payload"]["tank_id"]:
+            event_tank = event.get('payload', {}).get('tank_id')
+            if event_tank is None or tank_id == event_tank:
                 try:
                     queue.put_nowait(event)
                 except asyncio.QueueFull:
@@ -112,7 +113,7 @@ class ConnectionManager:
 
 
 async def live(websocket: WebSocket, tank_id: str = "tanque-01", ticket: str | None = None) -> None:
-    if os.getenv("JWT_SECRET") and not consume_ws_ticket(ticket):
+    if not consume_ws_ticket(ticket):
         await websocket.close(code=1008)
         return
     try:

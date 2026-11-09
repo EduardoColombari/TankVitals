@@ -1,4 +1,4 @@
-"""Real RabbitMQ metrics and a durable, bounded view of q.ws messages."""
+﻿"""Real RabbitMQ metrics and a durable, bounded view of q.ws messages."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import logging
 import os
 import sqlite3
 import time
-import hmac
 import secrets
 from contextlib import contextmanager
 from pathlib import Path
@@ -20,7 +19,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request as FastAPIRequest
 from app.ai_api import current_user
 
 router = APIRouter(prefix="/api")
-_login_failures: dict[str, tuple[int, float]] = {}
 _ws_tickets: dict[str, tuple[float, str]] = {}
 
 logger = logging.getLogger(__name__)
@@ -182,46 +180,32 @@ class MessagingMonitor:
 
 @router.post("/auth/login")
 async def login(request: FastAPIRequest):
-    """Validate generated demo credentials and issue a 30-minute HS256 JWT."""
-    raw = (await request.body()).decode("utf-8", errors="replace")
-    values = parse_qs(raw, keep_blank_values=True, max_num_fields=8)
-    username = values.get("username", [""])[0].strip().lower()
-    password = values.get("password", [""])[0]
-    role_env = {"viewer": "VIEWER", "operator": "OPERATOR", "admin": "ADMIN"}
-    alias = {"visualizador": "viewer", "operador": "operator"}
-    normalized = alias.get(username, username)
-    role = normalized if normalized in role_env else None
-    address = request.client.host if request.client else "unknown"
-    key = f"{address}:{username}"
-    count, until = _login_failures.get(key, (0, 0.0))
-    if until > time.monotonic():
-        raise HTTPException(429, "Muitas tentativas erradas. Tente novamente em alguns minutos.")
-    expected = os.getenv(f"DEMO_{role_env[role]}_PASSWORD", "") if role else ""
-    ok = bool(expected) and hmac.compare_digest(password.encode(), expected.encode())
-    if not ok:
-        count += 1
-        _login_failures[key] = (0, time.monotonic() + 300) if count >= 5 else (count, 0.0)
-        raise HTTPException(401, "Usuário ou senha inválidos.")
-    _login_failures.pop(key, None)
-    secret = os.getenv("JWT_SECRET")
-    if not secret:
-        raise HTTPException(503, "Autenticação não configurada")
-    import jwt
-    now = int(time.time())
-    token = jwt.encode({"sub": normalized, "role": role, "iat": now, "exp": now + 1800}, secret, algorithm="HS256")
-    return {"access_token": token, "token_type": "bearer"}
+    from app.catalog_api import engine
+    from app.core.auth import authenticate
+    if request.headers.get('content-type', '').startswith('application/json'):
+        try:
+            values = await request.json()
+            username, password = values.get('username', ''), values.get('password', '')
+        except (ValueError, AttributeError):
+            raise HTTPException(400, 'Credenciais invÃ¡lidas') from None
+    else:
+        values = parse_qs((await request.body()).decode('utf-8', errors='replace'), max_num_fields=8)
+        username, password = values.get('username', [''])[0], values.get('password', [''])[0]
+    if not isinstance(username, str) or not isinstance(password, str) or len(username) > 120:
+        raise HTTPException(400, 'Credenciais invÃ¡lidas')
+    return await asyncio.to_thread(authenticate, engine(request), username.strip().lower(), password)
 
 
 @router.get("/messaging")
 async def messaging(request: FastAPIRequest, user=Depends(current_user)):
     monitor = getattr(request.app.state, "messaging_monitor", None)
     if monitor is None:
-        raise HTTPException(503, "Monitoramento RabbitMQ indisponível")
+        raise HTTPException(503, "Monitoramento RabbitMQ indisponÃ­vel")
     try:
         return await monitor.snapshot()
     except Exception:
         logger.exception("Could not build RabbitMQ messaging snapshot")
-        raise HTTPException(503, "Métricas RabbitMQ indisponíveis") from None
+        raise HTTPException(503, "MÃ©tricas RabbitMQ indisponÃ­veis") from None
 
 
 @router.post("/ws/ticket")
@@ -240,3 +224,4 @@ def consume_ws_ticket(ticket: str | None) -> bool:
         return False
     row = _ws_tickets.pop(ticket, None)
     return row is not None and row[0] > time.monotonic()
+

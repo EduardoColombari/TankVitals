@@ -1,4 +1,4 @@
-# TankVitals integrated second-bimester stack. Generate ignored local credentials first.
+﻿# TankVitals integrated second-bimester stack. Generate ignored local credentials first.
 services:
   mosquitto:
     image: eclipse-mosquitto:2
@@ -81,21 +81,24 @@ services:
       retries: 20
 
   migrate:
-    image: postgres:16-alpine
+    image: tankvitals-app:local
+    pull_policy: build
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
     restart: "no"
+    command: ["python", "-m", "app.migrate"]
     environment:
-      PGHOST: postgres
-      PGPORT: "5432"
-      PGDATABASE: ${POSTGRES_DB:?Missing generated Postgres database}
-      PGUSER: ${POSTGRES_USER:?Missing generated Postgres user}
-      PGPASSWORD: ${POSTGRES_PASSWORD:?Missing generated Postgres password}
-    volumes:
-      - ./postgres/init.sql:/migration/init.sql:ro
-    command: ["sh", "-ec", "until pg_isready; do sleep 1; done; psql -v ON_ERROR_STOP=1 -f /migration/init.sql"]
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB:?Missing Postgres database}
+      POSTGRES_USER: ${POSTGRES_USER:?Missing Postgres user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Missing Postgres password}
+      DEMO_VIEWER_PASSWORD: ${DEMO_VIEWER_PASSWORD:?Missing viewer password}
+      DEMO_OPERATOR_PASSWORD: ${DEMO_OPERATOR_PASSWORD:?Missing operator password}
+      DEMO_ADMIN_PASSWORD: ${DEMO_ADMIN_PASSWORD:?Missing admin password}
     depends_on:
       postgres:
         condition: service_healthy
-
   token-bootstrap:
     image: tankvitals-app:local
     pull_policy: never
@@ -122,6 +125,7 @@ services:
 
   api:
     image: tankvitals-app:local
+    command: ["python", "-m", "app.api"]
     pull_policy: build
     build:
       context: ..
@@ -184,6 +188,8 @@ services:
       RABBITMQ_USER: ${RABBITMQ_GATEWAY_USERNAME:?Missing RabbitMQ gateway user}
       RABBITMQ_PASSWORD: ${RABBITMQ_GATEWAY_PASSWORD:?Missing RabbitMQ gateway password}
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       rabbitmq:
         condition: service_healthy
       mosquitto:
@@ -213,6 +219,8 @@ services:
       - influx_tokens:/run/plat:ro
       - writer_dedup:/var/lib/tankvitals-writer
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       rabbitmq:
         condition: service_healthy
       influxdb:
@@ -310,6 +318,8 @@ services:
       MQTT_PASSWORD: ${MQTT_SIMULATOR_PASSWORD:?Missing MQTT simulator password}
       SIM_SPEED: ${SIM_SPEED:-60}
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       mosquitto:
         condition: service_healthy
     healthcheck:
@@ -358,3 +368,4 @@ volumes:
   influx_tokens:
   app_data:
   writer_dedup:
+
