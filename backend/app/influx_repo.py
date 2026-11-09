@@ -54,6 +54,10 @@ def validate_query(tank_id: str, range_: str = "6h", window: str | None = None,
 class InfluxRepository:
     """Encapsula cliente, escrita e consultas do InfluxDB."""
 
+    def device_history(self, device, variable, period):
+        from app.telemetry_history import query_history
+        return query_history(self.query_api, settings.influx_bucket, period, [device], variable)
+
     def __init__(self) -> None:
         """Cria o cliente do InfluxDB a partir do config."""
 

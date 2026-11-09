@@ -57,6 +57,10 @@ def create_app(repo_factory=InfluxRepository, ingestor_factory=MqttIngestor) -> 
 
         ingestor = ingestor_factory(on_reading=on_reading, on_status=on_status, repository=repo)
         app.state.repo, app.state.ingestor, app.state.manager = repo, ingestor, manager
+        if os.getenv('AI_DATABASE_URL') or os.getenv('DATABASE_URL'):
+            from app.core.pg import Database
+            from app.core.runtime_config import database_url
+            app.state.database = Database(database_url())
         ai_bus, ai_store, ai_dispatcher = None, None, None
         messaging_stop, messaging_task = None, None
         try:
@@ -64,19 +68,9 @@ def create_app(repo_factory=InfluxRepository, ingestor_factory=MqttIngestor) -> 
                 async def forward_rabbit_event(routing_key: str, body: bytes) -> None:
                     try:
                         envelope = json.loads(body.decode("utf-8"))
-                        if not isinstance(envelope, dict) or envelope.get("type") not in {"telemetry", "insight"}:
+                        if not isinstance(envelope, dict):
                             return
-                        if envelope["type"] == "telemetry":
-                            parts = routing_key.split(".")
-                            if len(parts) != 4 or parts[0] != "telemetry":
-                                return
-                            tank_id = parts[1]
-                        else:
-                            tank_id = "tanque-01"
-                        payload = envelope.get("payload")
-                        if not isinstance(payload, dict):
-                            return
-                        await manager.broadcast({**envelope, "payload": {**payload, "tank_id": tank_id}})
+                        await manager.broadcast(envelope)
                     except (UnicodeDecodeError, json.JSONDecodeError, KeyError):
                         logger.warning("Invalid q.ws message was stored but not sent to WebSocket")
 
@@ -95,8 +89,10 @@ def create_app(repo_factory=InfluxRepository, ingestor_factory=MqttIngestor) -> 
                 app.state.ai_store = ai_store
                 ai_bus = RabbitBus()
                 await ai_bus.connect(os.environ["RABBITMQ_URL"])
+                app.state.bus = ai_bus
                 ai_dispatcher = asyncio.create_task(dispatch_jobs(ai_store, ai_bus))
-            await asyncio.to_thread(ingestor.start)
+            if not os.environ.get('RABBITMQ_URL'):
+                await asyncio.to_thread(ingestor.start)
             yield
         finally:
             closing = True
@@ -110,6 +106,8 @@ def create_app(repo_factory=InfluxRepository, ingestor_factory=MqttIngestor) -> 
                 await ai_bus.close()
             if ai_store:
                 await asyncio.to_thread(ai_store.close)
+            if getattr(app.state, 'database', None):
+                app.state.database.dispose()
             if messaging_stop:
                 messaging_stop.set()
             if messaging_task:
@@ -119,7 +117,7 @@ def create_app(repo_factory=InfluxRepository, ingestor_factory=MqttIngestor) -> 
 
     @app.middleware("http")
     async def require_api_session(request: Request, call_next):
-        if (os.getenv("JWT_SECRET") and request.url.path.startswith("/api/")
+        if (request.url.path.startswith("/api/")
                 and request.url.path not in {"/api/health", "/api/auth/login"}):
             value = request.headers.get("authorization", "")
             scheme, _, token = value.partition(" ")
@@ -132,7 +130,7 @@ def create_app(repo_factory=InfluxRepository, ingestor_factory=MqttIngestor) -> 
         return await call_next(request)
     app.add_middleware(CORSMiddleware,
                        allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
-                       allow_methods=["GET", "POST"], allow_headers=["*"])
+                       allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"], allow_headers=["*"])
 
     @app.exception_handler(RepositoryUnavailable)
     async def unavailable(request: Request, exc: RepositoryUnavailable):
@@ -150,6 +148,10 @@ def create_app(repo_factory=InfluxRepository, ingestor_factory=MqttIngestor) -> 
     app.include_router(messaging_router)
     from app.ai_api import router as ai_router
     app.include_router(ai_router)
+    from app.catalog_api import router as catalog_router
+    app.include_router(catalog_router)
+    from app.commands_api import router as command_router
+    app.include_router(command_router)
     app.add_api_websocket_route("/ws/live", live)
     return app
 

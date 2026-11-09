@@ -13,6 +13,9 @@ from app import mqtt_ingestor
 
 @pytest.fixture
 def service(monkeypatch):
+    import jwt
+    import time
+    monkeypatch.setenv('JWT_SECRET', 'test-secret-for-backend-authorization-1234')
     repo = Mock()
     repo.ping.return_value = True
     repo.write_reading.return_value = True
@@ -26,10 +29,17 @@ def service(monkeypatch):
     monkeypatch.setattr(mqtt_ingestor.mqtt, "Client", Mock(return_value=mqtt_client))
     app = create_app(repo_factory=lambda: repo)
     with TestClient(app) as client:
+        token = jwt.encode({'sub':'viewer', 'role':'viewer', 'exp':int(time.time())+1800},
+                           'test-secret-for-backend-authorization-1234', algorithm='HS256')
+        client.headers['Authorization'] = f'Bearer {token}'
         yield SimpleNamespace(client=client, app=app, repo=repo, mqtt=mqtt_client)
     mqtt_client.disconnect.assert_called_once()
     mqtt_client.loop_stop.assert_called_once()
     repo.close.assert_called_once()
+
+def ticket_url(service, tank='tanque-01'):
+    ticket = service.client.post('/api/ws/ticket').json()['ticket']
+    return f'/ws/live?ticket={ticket}&tank_id={tank}'
 
 
 def deliver(service, suffix, payload, tank="tanque-01"):
@@ -106,8 +116,8 @@ def test_database_failure_maps_to_503(service, path, method):
 
 
 def test_two_websockets_receive_reading_and_remaining_client_receives_status(service):
-    with service.client.websocket_connect("/ws/live") as first:
-        with service.client.websocket_connect("/ws/live") as second:
+    with service.client.websocket_connect(ticket_url(service)) as first:
+        with service.client.websocket_connect(ticket_url(service)) as second:
             deliver(service, "telemetry", {"device_id": "esp32", "tank_id": "tanque-01", "ph": 5.5})
             a, b = first.receive_json(), second.receive_json()
             assert a == b and a["type"] == "reading"
@@ -120,7 +130,7 @@ def test_two_websockets_receive_reading_and_remaining_client_receives_status(ser
 
 
 def test_websocket_filters_tanks(service):
-    with service.client.websocket_connect("/ws/live?tank_id=tanque-02") as socket:
+    with service.client.websocket_connect(ticket_url(service, 'tanque-02')) as socket:
         deliver(service, "status", b"online", tank="tanque-01")
         deliver(service, "status", b"offline", tank="tanque-02")
         assert socket.receive_json()["payload"] == {"tank_id": "tanque-02", "online": False}

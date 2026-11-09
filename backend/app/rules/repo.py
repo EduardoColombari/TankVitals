@@ -60,6 +60,7 @@ class RulesRepository:
                 off_at=float(row["off_at"]),
             )
             for row in rows
+            if row.get('enabled', True)
         ]
 
     def load_devices(self) -> dict[str, DeviceRow]:
@@ -88,7 +89,7 @@ class RulesRepository:
                 ),
             )
             for row in rows
-            if str(row["device_id"]) in active
+            if str(row["device_id"]) in active and row.get('active', True)
         ]
 
     # --- comandos ----------------------------------------------------------------

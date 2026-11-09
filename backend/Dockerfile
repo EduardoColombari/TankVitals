@@ -12,6 +12,8 @@ COPY backend/requirements.txt backend/requirements-iot.txt backend/plat-requirem
 RUN pip install --no-cache-dir -r requirements.txt -r requirements-iot.txt -r plat-requirements.txt
 
 COPY backend/app ./app
+COPY backend/alembic ./alembic
+COPY backend/alembic.ini ./alembic.ini
 COPY backend/tools ./tools
 COPY scripts ./scripts
 
@@ -24,4 +26,4 @@ EXPOSE 8000
 
 # Sem --reload: o recarregador duplicaria o ingestor MQTT (dois clientes com o
 # mesmo client_id se derrubam em laço).
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "app.api"]
