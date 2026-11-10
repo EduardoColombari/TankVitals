@@ -44,9 +44,18 @@ export async function request<T>(
   init: RequestInit = {},
   options: RequestOptions = {},
 ): Promise<T> {
+  return (await (await requestResponse(path, init, options)).json()) as T
+}
+
+/** Mesmo contrato de autenticação, preservando o corpo para streaming. */
+export async function requestResponse(
+  path: string,
+  init: RequestInit = {},
+  options: RequestOptions = {},
+): Promise<Response> {
   const useAuth = options.auth !== false
   const headers = new Headers(init.headers)
-  headers.set('Accept', 'application/json')
+  if (!headers.has('Accept')) headers.set('Accept', 'application/json')
 
   const token = useAuth ? authHooks.getToken() : null
   if (token) headers.set('Authorization', `Bearer ${token}`)
@@ -60,7 +69,7 @@ export async function request<T>(
     throw new ApiError(await errorDetail(response), response.status)
   }
 
-  return (await response.json()) as T
+  return response
 }
 
 async function errorDetail(response: Response): Promise<string> {

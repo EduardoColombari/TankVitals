@@ -105,6 +105,7 @@ export const PAGES: PageDef[] = [
   },
   {
     path: 'assistente',
+    component: () => import('../views/AssistantView.vue'),
     name: 'assistente',
     title: 'Assistente',
     icon: Bot,

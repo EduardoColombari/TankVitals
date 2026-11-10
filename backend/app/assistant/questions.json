@@ -1,0 +1,10 @@
+[
+  {"question":"Qual é o estado atual dos sensores?","expected":"Citar leituras e horários disponíveis; não inventar estado quando ausentes."},
+  {"question":"Qual bomba precisa de atenção primeiro?","expected":"Priorizar a menor saúde disponível, identificando a bomba."},
+  {"question":"Qual é a vida útil restante da bomba?","expected":"Usar rul_h em horas e indicar que é estimativa; pedir identificação se ambíguo."},
+  {"question":"Quais alertas estão abertos?","expected":"Citar apenas alertas abertos do resumo; diferenciar lista vazia de fonte indisponível."},
+  {"question":"Quais foram as métricas do último treino?","expected":"Usar métricas e versão do resumo, ou dizer não sei se ausentes."},
+  {"question":"Por que usamos InfluxDB e PostgreSQL?","expected":"InfluxDB para séries temporais; PostgreSQL para cadastros e registros relacionais."},
+  {"question":"Qual é o papel do MQTT e do RabbitMQ?","expected":"MQTT na borda; RabbitMQ distribui eventos aos serviços."},
+  {"question":"O assistente acessa o banco ou envia dados para a nuvem?","expected":"Backend monta resumo; LLM local no Ollama, sem acesso ao banco ou nuvem."}
+]

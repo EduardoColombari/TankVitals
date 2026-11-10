@@ -43,6 +43,29 @@ def login(registry, role='admin'):
     registry.client.headers['Authorization'] = 'Bearer ' + response.json()['access_token']
     return response.json()['access_token']
 
+
+def test_assistant_uses_shared_login_database_and_audit(registry, monkeypatch):
+    import httpx
+    from unittest.mock import Mock
+    from app.assistant import router as assistant
+
+    registry.app.state.repo = Mock()
+    registry.app.state.repo._query.return_value = []
+    monkeypatch.setattr(assistant, 'client', lambda: httpx.AsyncClient(
+        base_url='http://ollama', transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, text='{"message":{"content":"Sem leituras."}}\n{"done":true}\n'))))
+    login(registry, 'viewer')
+    response = registry.client.post('/api/assistant', json={'question': 'Como estão os tanques?'})
+    assert response.status_code == 200
+    assert 'Sem leituras.' in response.text
+    login(registry, 'admin')
+    response = registry.client.get('/api/audit', params={'type': 'assistant'})
+    assert response.status_code == 200
+    with registry.engine.connect() as conn:
+        row = conn.execute(select(audit).where(audit.c.type == 'assistant')).mappings().one()
+        assert row['username'] == 'viewer'
+        assert row['detail']['question'] == 'Como estão os tanques?'
+
 def test_seed_does_not_duplicate_or_overwrite(registry):
     with registry.engine.begin() as conn:
         conn.execute(devices.update().where(devices.c.id == 'od-01').values(name='Editado'))

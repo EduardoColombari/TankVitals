@@ -63,7 +63,14 @@ def create_app(repo_factory=InfluxRepository, ingestor_factory=MqttIngestor) -> 
             app.state.database = Database(database_url())
         ai_bus, ai_store, ai_dispatcher = None, None, None
         messaging_stop, messaging_task = None, None
+        assistant_db = None
         try:
+            if settings.assistant_database_url:
+                from app.core.pg import Database
+                assistant_db = Database(settings.assistant_database_url)
+                app.state.assistant_db = assistant_db
+            else:
+                app.state.assistant_db = getattr(app.state, "database", None)
             if os.environ.get("RABBITMQ_URL"):
                 async def forward_rabbit_event(routing_key: str, body: bytes) -> None:
                     try:
@@ -106,6 +113,8 @@ def create_app(repo_factory=InfluxRepository, ingestor_factory=MqttIngestor) -> 
                 await ai_bus.close()
             if ai_store:
                 await asyncio.to_thread(ai_store.close)
+            if assistant_db:
+                await asyncio.to_thread(assistant_db.dispose)
             if getattr(app.state, 'database', None):
                 app.state.database.dispose()
             if messaging_stop:
@@ -152,6 +161,8 @@ def create_app(repo_factory=InfluxRepository, ingestor_factory=MqttIngestor) -> 
     app.include_router(catalog_router)
     from app.commands_api import router as command_router
     app.include_router(command_router)
+    from app.assistant.router import router as assistant_router
+    app.include_router(assistant_router)
     app.add_api_websocket_route("/ws/live", live)
     return app
 
